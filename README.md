@@ -1,6 +1,6 @@
-# Balatro RL
+# BalatrAI
 
-A reinforcement learning agent that plays Balatro using a custom mod and Python training environment.
+A reinforcement learning agent that plays Balatro using a custom mod and Python training environment. Originally forked from https://github.com/angelvalentin80/balatro-rl
 
 ## Overview
 
