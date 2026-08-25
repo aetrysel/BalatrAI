@@ -43,15 +43,13 @@ class BalatroRewardCalculator:
             "good": 40.0,       # 40-74% of blind requirement (lowered from 50%)
             "decent": 20.0      # 20-39% of blind requirement (lowered from 25%)
         }
+    PACK_STATE_IDS = {9, 10, 15, 17, 18}
+
     def calculate_reward(self, current_state, prev_state=None):
         reward = 0.0
-    
-        # Shop_reward also calculates earning money,
-        # Money reward applies in all phases
-        
         reward += self.calculate_shop_reward(current_state, prev_state)
+        reward += self.calculate_pack_reward(current_state, prev_state)
         reward += self.calculate_play_reward(current_state, prev_state)
-
         return reward
     
     def calculate_shop_reward(self, current_state, prev_state=None):
@@ -125,9 +123,74 @@ class BalatroRewardCalculator:
         self.previous_money = current_money
         self.total_jokers = len(current_jokers)
 
+        # === VOUCHER PURCHASE ===
+        # Detect: shop had a voucher before, doesn't now, and money decreased
+        prev_shop_items = prev_game_state.get('shop', {}).get('items', [])
+        curr_shop_items = current_game_state.get('shop', {}).get('items', [])
+        prev_had_voucher = any(it.get('type') == 'voucher' for it in prev_shop_items)
+        curr_has_voucher = any(it.get('type') == 'voucher' for it in curr_shop_items)
+        if prev_had_voucher and not curr_has_voucher and money_spent > 0:
+            reward += 8.0
+
+        # === BOOSTER PURCHASE ===
+        prev_state_id = prev_game_state.get('state', 0)
+        curr_state_id = current_game_state.get('state', 0)
+        if prev_state_id == 5 and curr_state_id in self.PACK_STATE_IDS:
+            reward += 3.0
+
         return float(np.tanh(reward / 5.0) * 5.0)  # Soft clip shop rewards
 
-    def calculate_play_reward(self, current_state: Dict[str, Any], 
+    def calculate_pack_reward(self, current_state, prev_state=None) -> float:
+        """Reward for pack interactions: selecting cards and skipping."""
+        reward = 0.0
+        if not prev_state:
+            return reward
+
+        current_game_state = current_state.get('game_state', {})
+        prev_game_state = prev_state.get('game_state', {})
+
+        prev_state_id = prev_game_state.get('state', 0)
+        curr_state_id = current_game_state.get('state', 0)
+
+        if prev_state_id not in self.PACK_STATE_IDS:
+            return reward
+
+        prev_choices = prev_game_state.get('pack_choices', 0)
+        curr_choices = current_game_state.get('pack_choices', 0)
+
+        # A card was selected (choices decreased)
+        if curr_choices < prev_choices:
+            prev_joker_count = len(prev_game_state.get('jokers', []))
+            curr_joker_count = len(current_game_state.get('jokers', []))
+            prev_consumable_count = len(prev_game_state.get('consumables', []))
+            curr_consumable_count = len(current_game_state.get('consumables', []))
+
+            new_jokers = curr_joker_count - prev_joker_count
+            new_consumables = curr_consumable_count - prev_consumable_count
+
+            if prev_state_id == 18:  # BUFFOON_PACK — jokers
+                if new_jokers > 0:
+                    reward += 8.0
+                else:
+                    reward += 1.0  # still got something
+            elif prev_state_id == 10:  # PLANET_PACK — levels up hands
+                if new_consumables > 0:
+                    reward += 4.0
+            elif prev_state_id in {9, 15}:  # TAROT_PACK / SPECTRAL_PACK
+                if new_consumables > 0:
+                    reward += 3.0
+            elif prev_state_id == 17:  # STANDARD_PACK — playing cards
+                reward += 1.0
+
+        # Skipped with choices remaining — small penalty
+        if curr_state_id not in self.PACK_STATE_IDS and prev_choices > 0 and curr_choices == 0:
+            # Choices ran out but we didn't select — skip was used
+            # Only penalise if it wasn't the last card (prev_choices > 1 means we skipped early)
+            pass  # Skip penalty intentionally light; skipping standard packs is fine
+
+        return float(reward)
+
+    def calculate_play_reward(self, current_state: Dict[str, Any],
                         prev_state: Dict[str, Any] = None) -> float:
         """Simple reward focused on ante 1 small blind success"""
         reward = 0.0
@@ -141,6 +204,15 @@ class BalatroRewardCalculator:
         retry_count = inner_game_state.get('retry_count', 0)
         ante = inner_game_state.get('ante', 1)
         
+        # === USE_CONSUMABLE REWARD ===
+        # Detect by consumable count decreasing while in SELECTING_HAND
+        if prev_state:
+            prev_inner = prev_state.get('game_state', {})
+            prev_consumable_count = len(prev_inner.get('consumables', []))
+            curr_consumable_count = len(inner_game_state.get('consumables', []))
+            if curr_consumable_count < prev_consumable_count and inner_game_state.get('state', 0) == 1:
+                reward += 2.0  # reward per consumable used
+
         # === RETRY PENALTY ===
         # Negative reward for invalid actions that require retries
         if retry_count > 0:

@@ -1,14 +1,9 @@
 --- RLBridge output module
 --- Extracts and formats game state data for AI consumption
---- Provides comprehensive game information including cards, chips, and available actions
 
 local O = {}
 
---- Get comprehensive game state for AI
---- Collects all relevant game information into a structured format
---- @return table Complete game state data for AI processing
 function O.get_game_state()
-    -- Calculate game_over
     local game_over = 0
     if G.STATE == G.STATES.GAME_OVER then
         game_over = 1
@@ -24,58 +19,41 @@ function O.get_game_state()
         local ante = G.GAME and G.GAME.round_resets and G.GAME.round_resets.ante or 0
         local blind = G.GAME and G.GAME.blind or nil
         local is_boss = blind and blind.boss or false
-        if ante == 9 and is_boss then  -- ante resets to 9 internally after beating ante 8 boss
+        if ante == 9 and is_boss then
             game_win = 1
         end
     end
 
     return {
-        -- Basic state info
         state = G.STATE,
         blind_name = G.GAME and G.GAME.blind and G.GAME.blind.name or "None",
-        
         blind_cleared = blind_cleared,
         game_win = game_win,
         ante = G.GAME and G.GAME.round_resets and G.GAME.round_resets.ante or 1,
-
         round_count = G.GAME and G.GAME.stats and G.GAME.stats.rounds or 0,
-        
         game_over = game_over,
-
-        -- Round info (hands/discards left)
         round = O.get_round_info(),
-
-        -- Current blind chip requirement
         blind_chips = O.get_blind_chips(),
-
-        -- Hand info (cards in hand)
         hand = O.get_hand_info(),
-
-        -- Current total chips
         chips = G.GAME and G.GAME.chips or 0,
-
-        -- Current hand scoring (chips × mult = score)
         current_hand = O.get_current_hand_scoring(),
-
-        -- Current seed
-        seed = G.GAME and G.GAME.pseudorandom.seed or 0,
-
+        seed = G.GAME and G.GAME.pseudorandom and G.GAME.pseudorandom.seed or 0,
         gold = O.get_gold(),
-
+        reroll_cost = G.GAME and G.GAME.current_round and G.GAME.current_round.reroll_cost or 5,
+        deck_name = G.GAME and G.GAME.selected_back and G.GAME.selected_back.name or "Red",
         jokers = O.get_jokers(),
-
-        --Should we go to endless?
+        consumables = O.get_consumables(),
+        pack_cards = O.get_pack_cards(),
+        pack_choices = G.GAME and G.GAME.pack_choices or 0,
+        deck_cards = O.get_deck_cards(),
         auto_endless_config = auto_endless,
-
-        shop = {items = O.get_shop_items() },
+        shop = { items = O.get_shop_items() },
     }
 end
 
---- Get blind chip requirement 
---- @return number Chips needed to beat current blind
 function O.get_blind_chips()
     if not G.GAME or not G.GAME.blind then
-        return 300-- TODO probably fix this if we are doing more than one blind Default ante 1 small blind requirement
+        return 300
     end
     local ok, chips = pcall(function()
         return G.GAME.blind.chips
@@ -83,9 +61,6 @@ function O.get_blind_chips()
     return (ok and chips) or 300
 end
 
---- Get hand information
---- Extracts player's current hand cards and selection state
---- @return table Hand data with cards and metadata
 function O.get_hand_info()
     if not G.hand or not G.hand.cards then
         return { cards = {}, size = 0, highlighted_count = 0 }
@@ -110,10 +85,6 @@ function O.get_hand_info()
     }
 end
 
-
---- Get round information
---- Gets hands and discards left in the current round
---- @return table Round data with hands and discards remaining
 function O.get_round_info()
     return {
         hands_left = G.GAME and G.GAME.current_round and G.GAME.current_round.hands_left or 0,
@@ -121,38 +92,36 @@ function O.get_round_info()
     }
 end
 
-
---- Get current hand scoring information
---- Extracts chips, mult, and potential score for current/highlighted hand
---- @return table Hand scoring data with defaults
 function O.get_current_hand_scoring()
-    -- Try to get current hand preview info
     local chips = 0
     local mult = 0
     local score = 0
     local handname = "None"
-    
+
     if G.GAME and G.GAME.current_round and G.GAME.current_round.current_hand then
         chips = G.GAME.current_round.current_hand.chips or 0
         mult = G.GAME.current_round.current_hand.mult or 0
         score = G.GAME.current_round.current_hand.chip_total or (chips * mult)
         handname = G.GAME.current_round.current_hand.handname or "None"
     end
-    
-    return {
-        chips = chips,
-        mult = mult,
-        score = score,
-        handname = handname
-    }
+
+    return { chips = chips, mult = mult, score = score, handname = handname }
 end
 
---- Gets the current gold
 function O.get_gold()
     return G.GAME and G.GAME.dollars or 0
 end
 
---- Gets the current Jokers
+local function get_edition_str(card)
+    if card.edition then
+        if card.edition.foil then return "foil" end
+        if card.edition.holo then return "holo" end
+        if card.edition.polychrome then return "polychrome" end
+        if card.edition.negative then return "negative" end
+    end
+    return "none"
+end
+
 function O.get_jokers()
     local jokers = {}
     if G.jokers and G.jokers.cards then
@@ -160,25 +129,114 @@ function O.get_jokers()
             table.insert(jokers, {
                 name = card.config.center.name or "Unknown",
                 sell_cost = card.sell_cost or 1,
-                slot = i
+                slot = i,
+                edition = get_edition_str(card)
             })
         end
     end
     return jokers
 end
 
+function O.get_consumables()
+    local consumables = {}
+    if G.consumeables and G.consumeables.cards then
+        for i, card in ipairs(G.consumeables.cards) do
+            table.insert(consumables, {
+                name = card.config.center.name or "Unknown",
+                item_set = (card.config.center.set or "Unknown"),
+                slot = i
+            })
+        end
+    end
+    return consumables
+end
+
+function O.get_pack_cards()
+    local pack_cards = {}
+    if G.pack_cards and G.pack_cards.cards then
+        for i, card in ipairs(G.pack_cards.cards) do
+            local name = "Unknown"
+            local item_set = "Unknown"
+            if card.config and card.config.center then
+                name = card.config.center.name or "Unknown"
+                item_set = card.config.center.set or "Unknown"
+            elseif card.base then
+                name = (card.base.value or "") .. (card.base.suit or "")
+                item_set = "Standard"
+            end
+            table.insert(pack_cards, {
+                name = name,
+                item_set = item_set,
+                slot = i
+            })
+        end
+    end
+    return pack_cards
+end
+
+function O.get_deck_cards()
+    local deck_info = {}
+    if G.playing_cards then
+        for _, card in ipairs(G.playing_cards) do
+            local seal = card.seal or "None"
+            local enhancement = (card.ability and card.ability.name) or "Base"
+            table.insert(deck_info, {
+                seal = seal,
+                enhancement = enhancement,
+                edition = get_edition_str(card)
+            })
+        end
+    end
+    return deck_info
+end
+
 function O.get_shop_items()
     local items = {}
+
     if G.shop_jokers and G.shop_jokers.cards then
         for i, card in ipairs(G.shop_jokers.cards) do
             table.insert(items, {
                 name = card.config.center.name or "Unknown",
                 cost = card.cost or 999,
                 type = "joker",
+                item_set = card.config.center.set or "Joker",
                 slot = i
             })
         end
     end
+
+    if G.shop_vouchers and G.shop_vouchers.cards then
+        for i, card in ipairs(G.shop_vouchers.cards) do
+            table.insert(items, {
+                name = card.config.center.name or "Unknown",
+                cost = card.cost or 10,
+                type = "voucher",
+                item_set = "Voucher",
+                slot = i
+            })
+        end
+    end
+
+    if G.shop_booster and G.shop_booster.cards then
+        for i, card in ipairs(G.shop_booster.cards) do
+            local pack_size = 0
+            local pack_choose = 1
+            if card.ability then pack_size = card.ability.extra or 0 end
+            if card.config and card.config.center and card.config.center.config then
+                pack_choose = card.config.center.config.choose or 1
+            end
+            table.insert(items, {
+                name = card.config.center.name or "Unknown",
+                cost = card.cost or 4,
+                type = "booster",
+                item_set = "Booster",
+                slot = i,
+                pack_size = pack_size,
+                pack_choose = pack_choose
+            })
+        end
+    end
+
     return items
 end
 

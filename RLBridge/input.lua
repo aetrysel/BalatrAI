@@ -139,31 +139,135 @@ function I.discard_hand()
     utils.log_input("select_hand " .. utils.completed_success_msg)
     return { success = true }
 end
----Used for buying cards in the shop
-function I.buy_card(slot)
+--- Buy any item from G.shop_jokers by slot (jokers, tarots, planets that appear there)
+function I.buy_shop_joker_slot(slot)
     if not slot or type(slot) ~= "number" then
         return { success = false, error = "Invalid slot parameter" }
     end
-
     if not G.shop_jokers or not G.shop_jokers.cards then
-        return { success = false, error = "Shop not available" }
+        return { success = false, error = "Shop joker area not available" }
     end
-
     if slot < 1 or slot > #G.shop_jokers.cards then
         return { success = false, error = "Slot index out of bounds: " .. tostring(slot) }
     end
-
     local card = G.shop_jokers.cards[slot]
     if not card then
         return { success = false, error = "No card in slot: " .. tostring(slot) }
     end
-
     if G.GAME.dollars < card.cost then
         return { success = false, error = "Cannot afford card, cost: " .. tostring(card.cost) }
     end
-    
-    G.FUNCS.buy_from_shop({ config = {ref_table = card } })
-    utils.log_input("buy_card slot " .. tostring(slot) .. " " .. utils.completed_success_msg)
+    G.FUNCS.buy_from_shop({ config = { ref_table = card } })
+    utils.log_input("buy_shop_joker_slot " .. tostring(slot) .. " " .. utils.completed_success_msg)
+    return { success = true }
+end
+
+--- Buy the voucher from G.shop_vouchers slot 1
+function I.buy_voucher()
+    if not G.shop_vouchers or not G.shop_vouchers.cards or #G.shop_vouchers.cards == 0 then
+        return { success = false, error = "No voucher available" }
+    end
+    local card = G.shop_vouchers.cards[1]
+    if not card then
+        return { success = false, error = "No voucher card found" }
+    end
+    if G.GAME.dollars < (card.cost or 10) then
+        return { success = false, error = "Cannot afford voucher, cost: " .. tostring(card.cost) }
+    end
+    G.FUNCS.buy_from_shop({ config = { ref_table = card } })
+    utils.log_input("buy_voucher " .. utils.completed_success_msg)
+    return { success = true }
+end
+
+--- Buy a booster pack from G.shop_booster by slot index
+function I.buy_booster(slot)
+    if not slot or type(slot) ~= "number" then
+        return { success = false, error = "Invalid slot parameter" }
+    end
+    if not G.shop_booster or not G.shop_booster.cards then
+        return { success = false, error = "Shop booster area not available" }
+    end
+    if slot < 1 or slot > #G.shop_booster.cards then
+        return { success = false, error = "Booster slot out of bounds: " .. tostring(slot) }
+    end
+    local card = G.shop_booster.cards[slot]
+    if not card then
+        return { success = false, error = "No booster in slot: " .. tostring(slot) }
+    end
+    if G.GAME.dollars < (card.cost or 4) then
+        return { success = false, error = "Cannot afford booster, cost: " .. tostring(card.cost) }
+    end
+    G.FUNCS.buy_from_shop({ config = { ref_table = card } })
+    utils.log_input("buy_booster slot " .. tostring(slot) .. " " .. utils.completed_success_msg)
+    return { success = true }
+end
+
+--- Use a consumable card from G.consumeables by slot index
+--- Hand cards should already be highlighted (via select_hand) if the consumable needs targets
+function I.use_consumable(slot)
+    if not slot or type(slot) ~= "number" then
+        return { success = false, error = "Invalid slot parameter" }
+    end
+    if not G.consumeables or not G.consumeables.cards or #G.consumeables.cards == 0 then
+        return { success = false, error = "No consumables available" }
+    end
+    if slot < 1 or slot > #G.consumeables.cards then
+        return { success = false, error = "Consumable slot out of bounds: " .. tostring(slot) }
+    end
+    local card = G.consumeables.cards[slot]
+    if not card then
+        return { success = false, error = "No consumable in slot: " .. tostring(slot) }
+    end
+    if not card:can_use_consumeable() then
+        return { success = false, error = "Consumable cannot be used right now" }
+    end
+    local ok, err = pcall(function()
+        G.FUNCS.use_card({ config = { ref_table = card } })
+    end)
+    if not ok then
+        utils.log_input("use_consumable ERROR: " .. tostring(err))
+        return { success = false, error = tostring(err) }
+    end
+    utils.log_input("use_consumable slot " .. tostring(slot) .. " " .. utils.completed_success_msg)
+    return { success = true }
+end
+
+--- Select a card from G.pack_cards by slot index (during booster pack opening)
+function I.select_pack_card(slot)
+    if not slot or type(slot) ~= "number" then
+        return { success = false, error = "Invalid slot parameter" }
+    end
+    if not G.pack_cards or not G.pack_cards.cards or #G.pack_cards.cards == 0 then
+        return { success = false, error = "No pack cards available" }
+    end
+    if slot < 1 or slot > #G.pack_cards.cards then
+        return { success = false, error = "Pack card slot out of bounds: " .. tostring(slot) }
+    end
+    local card = G.pack_cards.cards[slot]
+    if not card then
+        return { success = false, error = "No pack card in slot: " .. tostring(slot) }
+    end
+    local ok, err = pcall(function()
+        G.FUNCS.use_card({ config = { ref_table = card } })
+    end)
+    if not ok then
+        utils.log_input("select_pack_card ERROR: " .. tostring(err))
+        return { success = false, error = tostring(err) }
+    end
+    utils.log_input("select_pack_card slot " .. tostring(slot) .. " " .. utils.completed_success_msg)
+    return { success = true }
+end
+
+--- Skip remaining pack card selections and close the booster pack
+function I.skip_booster()
+    local ok, err = pcall(function()
+        G.FUNCS.skip_booster({})
+    end)
+    if not ok then
+        utils.log_input("skip_booster ERROR: " .. tostring(err))
+        return { success = false, error = tostring(err) }
+    end
+    utils.log_input("skip_booster " .. utils.completed_success_msg)
     return { success = true }
 end
 

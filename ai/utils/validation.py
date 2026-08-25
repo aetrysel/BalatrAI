@@ -58,6 +58,20 @@ class GameStateValidator:
         assert isinstance(game_state.get("retry_count", 0), int)
         assert isinstance(game_state.get("seed", 0), str)
 
+        # Optional new fields — validate types when present
+        if "consumables" in game_state:
+            assert isinstance(game_state["consumables"], list)
+        if "pack_cards" in game_state:
+            assert isinstance(game_state["pack_cards"], list)
+        if "pack_choices" in game_state:
+            assert isinstance(game_state["pack_choices"], int)
+        if "deck_cards" in game_state:
+            assert isinstance(game_state["deck_cards"], list)
+        if "deck_name" in game_state:
+            assert isinstance(game_state["deck_name"], str)
+        if "reroll_cost" in game_state:
+            assert isinstance(game_state["reroll_cost"], (int, float))
+
         return True
 
     @staticmethod
@@ -129,6 +143,6 @@ class ResponseValidator:
         assert isinstance(response["action"], int)
         assert isinstance(response["params"], list)
         
-        valid_actions = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        valid_actions = list(range(1, 17))  # 1-16
         assert response["action"] in valid_actions, f"Invalid action ID: {response['action']}"
 

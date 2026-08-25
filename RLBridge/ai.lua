@@ -23,6 +23,14 @@ local blind_force_timer = 0
 
 local SHOP_DEBUG = false -- Set to true to enable shop state debug logging
 
+local function is_pack_state(state)
+    return state == G.STATES.TAROT_PACK
+        or state == G.STATES.PLANET_PACK
+        or state == G.STATES.SPECTRAL_PACK
+        or state == G.STATES.STANDARD_PACK
+        or state == G.STATES.BUFFOON_PACK
+end
+
 --- Initialize AI system
 --- Sets up communication and prepares the AI for operation
 --- @return nil
@@ -175,12 +183,20 @@ function AI.update()
                     state_transition_timer = 0.25
                 elseif pending_action.action == 5 then
                     state_transition_timer = 0.5
+                elseif pending_action.action == 13 then -- BUY_BOOSTER triggers pack state
+                    state_transition_timer = 0.5
+                elseif pending_action.action == 15 or pending_action.action == 16 then -- pack card select/skip
+                    state_transition_timer = 0.3
+                elseif pending_action.action == 14 then -- USE_CONSUMABLE
+                    state_transition_timer = 0.3
                 elseif current_state.state == G.STATES.BLIND_SELECT then
                     state_transition_timer = 0.5
                 elseif current_state.state == G.STATES.SHOP then
                     state_transition_timer = 0.1
+                elseif is_pack_state(current_state.state) then
+                    state_transition_timer = 0.2
                 else
-                    state_transition_timer = 0.01 
+                    state_transition_timer = 0.01
                 end
                 retry_count = 0  -- Reset retry count on success
                 pending_action = nil
@@ -222,7 +238,10 @@ function AI.hash_combined_state(game_state, available_actions)
         (game_state.hand and game_state.hand.size) or 0,
         (game_state.hand and game_state.hand.highlighted_count) or 0,
         (game_state.shop and #game_state.shop.items) or 0,
-        game_state.game_over or 0
+        game_state.game_over or 0,
+        #(game_state.consumables or {}),
+        #(game_state.pack_cards or {}),
+        game_state.pack_choices or 0,
     }
 
     -- Action components
@@ -238,15 +257,20 @@ function AI.hash_combined_state(game_state, available_actions)
 end
 
 --- Check if current state should be auto-skipped (not sent to AI)
---- @param current_state table Current game state  
+--- @param current_state table Current game state
 --- @param available_actions table Available actions list
 --- @return boolean True if should auto-skip, false if send to AI
 function AI.should_auto_skip(current_state, available_actions)
+    -- Never auto-skip pack states — AI must decide which cards to select
+    if is_pack_state(current_state.state) then
+        return false
+    end
+
     -- Auto-skip START_RUN in menu (action ID = 4)
     if current_state.state == G.STATES.MENU and #available_actions == 1 and available_actions[1] == 4 then
         return true
     end
-    
+
     -- Auto-skip SELECT_BLIND in blind selection (action ID = 5)
     if current_state.state == G.STATES.BLIND_SELECT and #available_actions == 1 and available_actions[1] == 5 then
         return true
@@ -258,7 +282,7 @@ function AI.should_auto_skip(current_state, available_actions)
     if current_state.state == G.STATES.GAME_OVER then
         return false
     end
-    
+
     -- Auto-skip ROUND_EVAL
     if current_state.state == G.STATES.ROUND_EVAL then
         local is_busy = false
@@ -266,16 +290,16 @@ function AI.should_auto_skip(current_state, available_actions)
             local queue_size = #G.CONTROLLER.queue
             local locks_size = 0
             for _ in pairs(G.CONTROLLER.locks) do locks_size = locks_size + 1 end
-    
+
             if queue_size > 0 or locks_size > 0 then
                 is_busy = true
             end
         end
 
-        if is_busy then 
-            return false 
+        if is_busy then
+            return false
         end
-    
+
         if #available_actions > 0 and not cash_out_executed then
             return true
         end

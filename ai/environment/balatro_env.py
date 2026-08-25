@@ -55,42 +55,41 @@ class BalatroEnv(gym.Env):
         self.replay_system = ReplaySystem()
         self.actions_taken = []
 
-        self.slices = {
-            "action_selection": slice(0,1),
-        }
+        # Action space constants
+        self.MAX_ACTIONS = 16        # actions 0-15 (balatro IDs 1-16)
+        self.MAX_CARDS = 8           # binary card selectors
+        self.MAX_SHOP_SLOTS = 5      # shared by BUY_JOKER and BUY_BOOSTER
+        self.MAX_JOKER_SLOTS = 5     # for SELL_JOKER
+        self.MAX_CONSUMABLE_SLOTS = 5  # for USE_CONSUMABLE
+        self.MAX_PACK_SLOTS = 5      # for SELECT_PACK_CARD
 
-        # Define Gymnasium spaces
-        # Action Spaces; This should describe the type and shape of the action
-        # Constants - Core gameplay actions only (SELECT_HAND=1, PLAY_HAND=2, DISCARD_HAND=3)
-        self.MAX_ACTIONS = 11
-        self.MAX_CARDS = 8  # Max cards in hand
-        self.MAX_SHOP_SLOTS = 5
-        self.MAX_JOKER_SLOTS = 5
-        action_selection = np.array([self.MAX_ACTIONS])
-        card_indices = np.array([2] * self.MAX_CARDS) # 8 cards, each can be selected (1) or not (0) #TODO can we or have we already masked card selection?
-        shop_slot = np.array([self.MAX_SHOP_SLOTS])
-        joker_slot = np.array([self.MAX_JOKER_SLOTS])
-
-        self.action_space = spaces.MultiDiscrete(np.concatenate([
-            action_selection,
-            card_indices, shop_slot, joker_slot
-        ]))
         ACTION_SLICE_LAYOUT = [
-            ("action_selection", 1),
-            ("card_indices", self.MAX_CARDS),
-            ("shop_slot", 1),
-            ("joker_slot", 1),
+            ("action_selection",  1),
+            ("card_indices",      self.MAX_CARDS),
+            ("shop_slot",         1),
+            ("joker_slot",        1),
+            ("consumable_slot",   1),
+            ("pack_card_slot",    1),
         ]
         slices = self._build_action_slices(ACTION_SLICE_LAYOUT)
-        
-        # Observation space: This should describe the type and shape of the observation
-        # Constants
-        self.OBSERVATION_SIZE = 313
+        self.slices = slices
+
+        self.action_space = spaces.MultiDiscrete(np.concatenate([
+            np.array([self.MAX_ACTIONS]),
+            np.array([2] * self.MAX_CARDS),
+            np.array([self.MAX_SHOP_SLOTS]),
+            np.array([self.MAX_JOKER_SLOTS]),
+            np.array([self.MAX_CONSUMABLE_SLOTS]),
+            np.array([self.MAX_PACK_SLOTS]),
+        ]))
+
+        # Observation space
+        self.OBSERVATION_SIZE = 411
         self.observation_space = spaces.Box(
-            low=-np.inf, # lowest bound of observation data
-            high=np.inf, # highest bound of observation data
-            shape=(self.OBSERVATION_SIZE,), # Adjust based on actual state size which  This is a 1D array 
-            dtype=np.float32 # Data type of the numbers
+            low=-np.inf,
+            high=np.inf,
+            shape=(self.OBSERVATION_SIZE,),
+            dtype=np.float32
         )
 
         # Initialize mappers
@@ -162,10 +161,9 @@ class BalatroEnv(gym.Env):
         # Store previous state for reward calculation
         self.prev_state = self.current_state
 
-        state_id = self.current_state.get('game_state', {1}).get('state', 0)
+        state_id = self.current_state.get('game_state', {}).get('state', 0)
 
-        if state_id == 8:
-        # Force action selection to CASH_OUT if it isn't already
+        if state_id == 8:  # ROUND_EVAL: force CASH_OUT (ai index 10 → balatro 11)
             action[self.slices["action_selection"]] = [10]
         
         # Send action response to Balatro mod
@@ -303,72 +301,98 @@ class BalatroEnv(gym.Env):
         # Safe fallback: allow all actions
         return np.ones(sum(self.action_space.nvec), dtype=bool)
     
+    PACK_STATE_IDS = {9, 10, 15, 17, 18}
+
     def _create_action_mask(self, available_actions, current_game_state):
-        """Create action mask for MultiDiscrete space"""
+        """Create action mask for MultiDiscrete space."""
         action_masks = []
         state_id = current_game_state.get('game_state', {}).get('state', 0)
-    
-        action_selection_mask = [False] * self.MAX_ACTIONS
+        inner_state = current_game_state.get('game_state', {})
+        money = inner_state.get('gold', 0)
+
         balatro_to_ai_mapping = {
-            1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, 
-            7: 6, 8: 7, 9: 8, 10: 9, 11: 10
+            1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5,
+            7: 6, 8: 7, 9: 8, 10: 9, 11: 10,
+            12: 11, 13: 12, 14: 13, 15: 14, 16: 15,
         }
 
-        if state_id == 8:
+        action_selection_mask = [False] * self.MAX_ACTIONS
+        if state_id == 8:  # ROUND_EVAL — force CASH_OUT (ai index 10)
             action_selection_mask[10] = True
         else:
             for action_id in available_actions:
-                if action_id in balatro_to_ai_mapping:
-                    ai_index = balatro_to_ai_mapping[action_id]
-                    action_selection_mask[ai_index] = True
-                    
+                ai_idx = balatro_to_ai_mapping.get(action_id)
+                if ai_idx is not None:
+                    action_selection_mask[ai_idx] = True
         action_masks.append(action_selection_mask)
 
         if state_id == 8:
-            # ROUND_EVAL: Disable everything but the action itself
+            # ROUND_EVAL: block all param slots
             for _ in range(self.MAX_CARDS):
                 action_masks.append([True, False])
             action_masks.append([False] * self.MAX_SHOP_SLOTS)
             action_masks.append([False] * self.MAX_JOKER_SLOTS)
+            action_masks.append([False] * self.MAX_CONSUMABLE_SLOTS)
+            action_masks.append([False] * self.MAX_PACK_SLOTS)
+
+        elif state_id in self.PACK_STATE_IDS:
+            # PACK states: card selection not relevant
+            for _ in range(self.MAX_CARDS):
+                action_masks.append([True, False])
+            action_masks.append([False] * self.MAX_SHOP_SLOTS)
+            action_masks.append([False] * self.MAX_JOKER_SLOTS)
+            action_masks.append([False] * self.MAX_CONSUMABLE_SLOTS)
+            # Pack card slots: enable slots that exist
+            pack_cards = inner_state.get('pack_cards', [])
+            pack_mask = [False] * self.MAX_PACK_SLOTS
+            for i in range(min(len(pack_cards), self.MAX_PACK_SLOTS)):
+                pack_mask[i] = True
+            action_masks.append(pack_mask)
 
         elif state_id == 5:
-            # SHOP: Disable cards, enable shop slots based on money
+            # SHOP: disable card selection, enable shop/joker/booster slots
             for _ in range(self.MAX_CARDS):
-                action_masks.append([True, False]) 
-        
-            inner_state = current_game_state.get('game_state', {})
-            current_shop_items = inner_state.get('shop', {}).get('items', [])
-            money = inner_state.get('gold', 0)
-        
-            shop_masks = [False] * self.MAX_SHOP_SLOTS
-            for i, item in enumerate(current_shop_items):
-                if i < self.MAX_SHOP_SLOTS and item.get('cost', 999) <= money:
-                    shop_masks[i] = True
-            action_masks.append(shop_masks)
+                action_masks.append([True, False])
 
-            avaliable_jokers = inner_state.get('jokers', [])
+            shop_items = inner_state.get('shop', {}).get('items', [])
+            joker_items = [it for it in shop_items if it.get('type') == 'joker']
+            booster_items = [it for it in shop_items if it.get('type') == 'booster']
+
+            shop_mask = [False] * self.MAX_SHOP_SLOTS
+            # BUY_JOKER uses shop_slot for joker area slots
+            for i, item in enumerate(joker_items):
+                if i < self.MAX_SHOP_SLOTS and item.get('cost', 999) <= money:
+                    shop_mask[i] = True
+            # BUY_BOOSTER reuses shop_slot for booster area slots
+            for i, item in enumerate(booster_items):
+                if i < self.MAX_SHOP_SLOTS and item.get('cost', 999) <= money:
+                    shop_mask[i] = True
+            action_masks.append(shop_mask)
+
+            owned_jokers = inner_state.get('jokers', [])
             joker_mask = [False] * self.MAX_JOKER_SLOTS
-            for i in range(min(len(avaliable_jokers), self.MAX_JOKER_SLOTS)):
+            for i in range(min(len(owned_jokers), self.MAX_JOKER_SLOTS)):
                 joker_mask[i] = True
             action_masks.append(joker_mask)
 
-            if 10 in available_actions:
-                # Check if we are in a transition state
-                pass
-            if state_id == 5:
-                if self.actions_taken and self.actions_taken[-1].get('action') == 10:
-                    action_selection_mask[9] = False
+            action_masks.append([False] * self.MAX_CONSUMABLE_SLOTS)
+            action_masks.append([False] * self.MAX_PACK_SLOTS)
 
         else:
-            # BLIND/HAND: Handle Card Selection
-            # If PLAY or DISCARD is available, cards should already be selected 
-            # (or AI shouldn't select more), otherwise allow selection.
+            # SELECTING_HAND and other states
             can_select = not any(a in [2, 3] for a in available_actions)
             for _ in range(self.MAX_CARDS):
                 action_masks.append([True, True] if can_select else [True, False])
-            
             action_masks.append([False] * self.MAX_SHOP_SLOTS)
             action_masks.append([False] * self.MAX_JOKER_SLOTS)
+
+            consumables = inner_state.get('consumables', [])
+            consumable_mask = [False] * self.MAX_CONSUMABLE_SLOTS
+            if 14 in available_actions:  # USE_CONSUMABLE available
+                for i in range(min(len(consumables), self.MAX_CONSUMABLE_SLOTS)):
+                    consumable_mask[i] = True
+            action_masks.append(consumable_mask)
+            action_masks.append([False] * self.MAX_PACK_SLOTS)
 
         flat = [item for sublist in action_masks for item in sublist]
         return flat
