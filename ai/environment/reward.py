@@ -21,8 +21,9 @@ class BalatroRewardCalculator:
         self.current_blind_name = ''
         self.current_blind_chips = 0       # requirement for current blind
         self.current_blind_ante = 1
+        self.current_round_count = 0       # round_count when this blind started
         self.current_round_hands = []      # hands played in current blind
-        self.rounds_played = []            # completed rounds: [{blind_name, blind_chips, ante, hands, cleared}]
+        self.rounds_played = []            # completed rounds: [{blind_name, blind_chips, ante, round_num, hands, cleared}]
         self.highest_chips_this_blind = 0  # peak chips seen this blind (for game_over reporting)
 
         # Game-over reporting
@@ -180,6 +181,7 @@ class BalatroRewardCalculator:
                     'blind_name': self.current_blind_name,
                     'blind_chips': self.current_blind_chips,
                     'ante': self.current_blind_ante,
+                    'round_num': self.current_round_count,
                     'hands': list(self.current_round_hands),
                     'cleared': self.blind_already_defeated,
                 })
@@ -190,17 +192,10 @@ class BalatroRewardCalculator:
             self.current_blind_name = blind_name
             self.current_blind_chips = blind_chips
             self.current_blind_ante = ante
+            self.current_round_count = inner_game_state.get('round_count', 0)
 
         # Track peak chips for accurate game-over reporting
         self.highest_chips_this_blind = max(self.highest_chips_this_blind, current_chips)
-
-        # Print blind clear notification — ROUND_EVAL is auto-skipped on Lua side, so detect
-        # via state transition SELECTING_HAND(1) → SHOP(5)
-        prev_state_id = prev_game_state.get('state', 0)
-        curr_state_id = inner_game_state.get('state', 0)
-        if prev_state_id == 1 and curr_state_id == 5 and not self.blind_already_defeated:
-            print(f"✅ Blind cleared! Ante {self.current_blind_ante} - {self.current_blind_name} "
-                  f"| {self.highest_chips_this_blind}/{self.current_blind_chips} chips")
 
         # === USE_CONSUMABLE REWARD ===
         if prev_state:
@@ -217,7 +212,7 @@ class BalatroRewardCalculator:
 
         # === HAND TYPE tracking ===
         current_hand_info = inner_game_state.get('current_hand', {})
-        current_hand_played = current_hand_info.get('handname', 'None')
+        current_hand_played = current_hand_info.get('last_handname', 'None')
         if current_hand_played and current_hand_played != 'None' and current_hand_played != '':
             self.last_seen_hand_type = current_hand_played
 
@@ -255,6 +250,9 @@ class BalatroRewardCalculator:
             reward_breakdown.append(f"BLIND CLEARED: +{base_reward:.1f} (base) +{efficiency_bonus:.1f} (efficiency)")
             self.blind_already_defeated = True
             self.winning_chips = current_chips
+            print(f"✅ Blind cleared! Ante {self.current_blind_ante} - {self.current_blind_name} "
+                  f"| {self.highest_chips_this_blind}/{self.current_blind_chips} chips "
+                  f"[round {self.current_round_count}]")
 
         # === PROGRESSION BONUS ===
         if ante > self.current_ante:
@@ -316,6 +314,7 @@ class BalatroRewardCalculator:
         self.current_blind_name = ''
         self.current_blind_chips = 0
         self.current_blind_ante = 1
+        self.current_round_count = 0
         self.current_round_hands = []
         self.rounds_played = []
         self.highest_chips_this_blind = 0
@@ -342,6 +341,7 @@ class BalatroRewardCalculator:
                 'blind_name': self.current_blind_name,
                 'blind_chips': self.current_blind_chips,
                 'ante': self.current_blind_ante,
+                'round_num': self.current_round_count,
                 'hands': list(self.current_round_hands),
                 'cleared': self.blind_already_defeated,
             })
@@ -350,7 +350,8 @@ class BalatroRewardCalculator:
     def _log_rounds(self, rounds):
         for round_data in rounds:
             cleared_marker = ' [cleared!]' if round_data.get('cleared') else ''
-            print(f"   Ante {round_data['ante']} - {round_data['blind_name']} ({round_data['blind_chips']} needed){cleared_marker}:")
+            round_num = round_data.get('round_num', 0)
+            print(f"   Ante {round_data['ante']} - {round_data['blind_name']} ({round_data['blind_chips']} needed) [round {round_num}]{cleared_marker}:")
             for i, hand in enumerate(round_data['hands'], 1):
                 print(f"      Hand {i}: {hand['hand_type']} "
                       f"(+{hand['chips']} chips, total: {hand['total_chips']}/{hand['blind_chips']})")

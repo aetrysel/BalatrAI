@@ -19,6 +19,7 @@ local retry_count = 0
 
 local blind_forced = false
 local blind_force_timer = 0
+local win_screen_shown = false
 
 local SHOP_DEBUG = false -- Set to true to enable shop state debug logging
 
@@ -57,7 +58,7 @@ end
 function AI.update()
     if win_screen_active then
         win_screen_timer = win_screen_timer + (G.FPS_CAP and (1/G.FPS_CAP) or 0.016)
-        if win_screen_timer > 10.0 then
+        if win_screen_timer > 30.0 then
             utils.log_ai("Win screen timeout — forcing resume")
             win_screen_active = false
             win_screen_timer = 0
@@ -259,6 +260,7 @@ function AI.should_auto_skip(current_state, available_actions)
         return false
     end
 
+    --- ===== OLD ROUND EVAL CODE ====
     -- -- Auto-skip ROUND_EVAL
     -- if current_state.state == G.STATES.ROUND_EVAL then
     --     local is_busy = false
@@ -280,6 +282,11 @@ function AI.should_auto_skip(current_state, available_actions)
     --         return true
     --     end
     -- end
+
+    -- Python handles ALL ROUND_EVAL states including game win detection
+    if current_state.state == G.STATES.ROUND_EVAL then
+        return false
+    end
 
     return false
 end
@@ -329,6 +336,21 @@ function AI.execute_auto_skip_action(current_state, available_actions)
         return
     end
     
+    -- WIN state: display win screen for 30s, then restart run
+    if current_state.state == G.STATES.WIN then
+        if not win_screen_shown then
+            win_screen_active = true
+            win_screen_timer = 0
+            win_screen_shown = true
+        else
+            win_screen_shown = false
+            local input = require("input")
+            input.start_run({ seed = "" })
+            last_combined_hash = nil
+        end
+        return
+    end
+
     local action_id = available_actions[1]
     utils.log_ai("Auto-executing action: " .. action.get_action_name(action_id))
     

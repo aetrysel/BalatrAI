@@ -203,6 +203,24 @@ class HistoryLogger:
 
         return ""
 
+    def log_win(self, game_state, episode_num):
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        gs = game_state.get('game_state', {})
+        jokers = gs.get('jokers', [])
+        joker_names = [j.get('name', 'Unknown') for j in jokers]
+        ante = gs.get('ante', 0)
+        chips = gs.get('chips', 0)
+        gold = gs.get('gold', 0)
+        round_count = gs.get('round_count', 0)
+        deck = gs.get('deck_name', 'Unknown')
+
+        self._write(f"\n{'=' * 70}")
+        self._write(f"  WIN! Episode {episode_num}  |  {ts}")
+        self._write(f"  Ante: {ante}  |  Chips: {chips}  |  Gold: ${gold}  |  Rounds: {round_count}")
+        self._write(f"  Deck: {deck}")
+        self._write(f"  Jokers: [{', '.join(joker_names) if joker_names else 'None'}]")
+        self._write(f"{'=' * 70}")
+
     def _write(self, line):
         self._file.write(line + '\n')
 

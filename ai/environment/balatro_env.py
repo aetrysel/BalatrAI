@@ -30,7 +30,7 @@ class BalatroEnv(gym.Env):
     without knowing about the underlying pipe communication system.
     """
     
-    def __init__(self, seed=None, deck="Red Deck"):
+    def __init__(self, seed=None, deck="Red Deck", is_endless=False):
         super().__init__()
         self.logger = logging.getLogger(__name__)
         self.current_state = None
@@ -39,6 +39,7 @@ class BalatroEnv(gym.Env):
         self.restart_pending = False
         self.seed = seed
         self.deck = deck
+        self.is_endless = is_endless
 
         # Initialize communication system — swap transport based on env var
         if os.getenv("BALATRO_COMM_MODE") == "socket":
@@ -167,26 +168,68 @@ class BalatroEnv(gym.Env):
         # Store previous state for reward calculation
         self.prev_state = self.current_state
 
-        state_id = self.current_state.get('game_state', {}).get('state', 0)
+        current_gs = self.current_state.get('game_state', {})
+        state_id = current_gs.get('state', 0)
+        is_game_win = (state_id == 8 and current_gs.get('game_win', 0) == 1)
 
         if state_id == 8:  # ROUND_EVAL: force CASH_OUT (ai index 10 → balatro 11)
             action[self.slices["action_selection"]] = [10]
-        
+
         # Send action response to Balatro mod
         response_data = self.action_mapper.process_action(rl_action=action, state_id=state_id)
         self.actions_taken.append(response_data)
         success = self.pipe_io.send_response(response_data)
         if not success:
             raise RuntimeError("Failed to send response to Balatro")
-        
+
+        # Win detected from ROUND_EVAL state (game_win=1 only set there)
+        if is_game_win:
+            win_obs = self.state_mapper.process_game_state(self.current_state)
+            win_reward = self.reward_calculator.calculate_reward(
+                current_state=self.current_state,
+                prev_state=self.prev_state or {},
+            )
+            self.history_logger.log_step(self.prev_state, response_data, self.current_state)
+            self.history_logger.log_win(self.current_state, self._episode_count)
+            self.replay_system.try_save_replay(
+                file_path=self.replay_system.REPLAY_FILE_PATH,
+                seed=current_gs.get('seed', ''),
+                actions=self.actions_taken,
+                score=win_reward,
+                chips=current_gs.get('chips', 0)
+            )
+            win_info = {
+                "won": True,
+                "ante": current_gs.get('ante', 0),
+                "round": current_gs.get('round_count', 0),
+                "chips": current_gs.get('chips', 0),
+                "blind_chips": current_gs.get('blind_chips', 0),
+                "blind_cleared": True,
+                "hand_type": current_gs.get('current_hand', {}).get('last_handname', 'None'),
+                "hand_score": current_gs.get('current_hand', {}).get('last_score', 0),
+                "jokers": current_gs.get('jokers', []),
+                "consumable_count": len(current_gs.get('consumables', [])),
+            }
+            if not self.is_endless:
+                # Non-endless: Lua WIN auto-skip handles 30s screen then restart
+                # reset() will block in wait_for_request() until new run starts
+                return win_obs, win_reward, True, False, win_info
+            # Endless: count as win but continue — consume next state (SHOP after cash_out)
+            next_request = self.pipe_io.wait_for_request()
+            if not next_request:
+                return win_obs, win_reward, True, False, {**win_info, "timeout": True}
+            self.current_state = next_request
+            available_actions = next_request.get('available_actions', [])
+            try:
+                self._action_masks = self._create_action_mask(available_actions, self.current_state)
+            except Exception as e:
+                self.logger.error(f"Action mask error: {e}", exc_info=True)
+                self._action_masks = np.ones(sum(self.action_space.nvec), dtype=bool)
+            self.history_logger.log_step(self.prev_state, response_data, next_request)
+            return self.state_mapper.process_game_state(self.current_state), win_reward, False, False, win_info
+
         # Wait for next request with new game state
         next_request = self.pipe_io.wait_for_request()
-        if next_request:
-            state_id = next_request.get('game_state', {}).get('state', 0)
-                        
-            if state_id == 8:
-                import time
-                time.sleep(0.1)
         if not next_request:
             self.game_over = True
             observation = self.state_mapper.process_game_state(self.current_state)
@@ -219,9 +262,10 @@ class BalatroEnv(gym.Env):
                 "chips": last_gs.get('chips', 0),
                 "blind_chips": last_gs.get('blind_chips', 0),
                 "blind_cleared": False,
-                "hand_type": last_gs.get('current_hand', {}).get('handname', 'None'),
-                "hand_score": last_gs.get('current_hand', {}).get('score', 0),
+                "hand_type": last_gs.get('current_hand', {}).get('last_handname', 'None'),
+                "hand_score": last_gs.get('current_hand', {}).get('last_score', 0),
                 "jokers": last_gs.get('jokers', []),
+                "consumable_count": len(last_gs.get('consumables', [])),
             }
         while next_request.get('game_state', {}).get('state') == 4:
             self.logger.info("Auto-handling START_RUN state, sending restart")
@@ -240,43 +284,8 @@ class BalatroEnv(gym.Env):
             )
         # Update current state
         self.current_state = next_request
-        is_endless_enabled = self.current_state.get('auto_endless_config', False)
-     
         game_state = self.current_state.get('game_state', {})
-        jokers = game_state.get('jokers', [])
-        
-        # Check for game win condition
-        game_win_flag = game_state.get('game_win', 0)
-        if game_win_flag == 1:
-            observation = self.state_mapper.process_game_state(self.current_state)
-            reward = self.reward_calculator.calculate_reward(
-                current_state=self.current_state,
-                prev_state=self.prev_state or {},
-            )
 
-            # Save replay
-            self.replay_system.try_save_replay(
-                file_path=self.replay_system.REPLAY_FILE_PATH,
-                seed=game_state.get('seed', ''),
-                actions=self.actions_taken,
-                score=reward,
-                chips=game_state.get('chips', 0)
-            )
-            terminated = not is_endless_enabled
-            self.history_logger.log_step(self.prev_state, response_data, next_request)
-            return observation, reward, terminated, False, {
-                "won": True,
-                "ante": game_state.get('ante', 0),
-                "round": game_state.get('round_count', 0),
-                "chips": game_state.get('chips', 0),
-                "blind_chips": game_state.get('blind_chips', 0),
-                "blind_cleared": game_state.get('blind_cleared', 0) == 1,
-                "hand_type": game_state.get('current_hand', {}).get('handname', 'None'),
-                "hand_score": game_state.get('current_hand', {}).get('score', 0),
-                "jokers": jokers,
-                "win_detected": True,
-                "is_endless": is_endless_enabled,
-            }
         # Process new state for SB3
         observation = self.state_mapper.process_game_state(self.current_state)
         # Calculate reward using expert reward calculator
@@ -295,9 +304,10 @@ class BalatroEnv(gym.Env):
             "chips": game_state.get('chips', 0),
             "blind_chips": game_state.get('blind_chips', 0),
             "blind_cleared": game_state.get('blind_cleared', 0) == 1,
-            "hand_type": game_state.get('current_hand', {}).get('handname', 'None'),
-            "hand_score": game_state.get('current_hand', {}).get('score', 0),
+            "hand_type": game_state.get('current_hand', {}).get('last_handname', 'None'),
+            "hand_score": game_state.get('current_hand', {}).get('last_score', 0),
             "jokers": game_state.get('jokers', []),
+            "consumable_count": len(game_state.get('consumables', [])),
         }
 
         # Create action mask for MaskablePPO

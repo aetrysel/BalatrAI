@@ -1,6 +1,16 @@
 {
   "seeds": [
-    {"name": "training", "value": "JFKGEEMG"},
-    {"name": "testing", "value": "FK76PMFU"}
+    {
+      "name": "training",
+      "value": "JFKGEEMG"
+    },
+    {
+      "name": "testing",
+      "value": "FK76PMFU"
+    },
+    {
+      "name": "blank seed",
+      "value": " "
+    }
   ]
 }

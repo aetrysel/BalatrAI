@@ -240,9 +240,9 @@ def mask_fn(env):
     return env.action_masks()
 
 
-def create_environment(seed=None, deck="Red Deck"):
+def create_environment(seed=None, deck="Red Deck", is_endless=False):
     """Create and wrap the Balatro environment"""
-    env = BalatroEnv(seed=seed, deck=deck)
+    env = BalatroEnv(seed=seed, deck=deck, is_endless=is_endless)
     env = ActionMasker(env, mask_fn)
     env = Monitor(env, filename="training_monitor.csv")
     return env
@@ -295,7 +295,7 @@ def create_callbacks(save_freq=1000, checkpoint_dir="./models/"):
     return callbacks
 
 
-def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resume_from=None, checkpoint_dir="./models/", seed=None, deck="Red Deck"):
+def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resume_from=None, checkpoint_dir="./models/", seed=None, deck="Red Deck", is_endless=False):
     """
     Main training function
 
@@ -312,7 +312,7 @@ def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resu
     logger.info(f"Training for {total_timesteps} timesteps")
 
     try:
-        env = create_environment(seed=seed, deck=deck)
+        env = create_environment(seed=seed, deck=deck, is_endless=is_endless)
 
         if resume_from and Path(resume_from).exists():
             logger.info(f"Resuming training from: {resume_from}")
@@ -421,6 +421,11 @@ if __name__ == "__main__":
     training_steps = select_training_steps()
     print(f"Training steps: {training_steps}")
 
+    # --- Endless mode ---
+    endless_raw = input("Endless run? (y/N): ").strip().lower()
+    is_endless = (endless_raw == 'y')
+    print(f"Endless mode: {'ON' if is_endless else 'OFF (stops at ante 8 boss)'}")
+
     # Write config for the Lua mod auto-skip
     write_run_config(seed_choice, deck_choice)
 
@@ -471,6 +476,7 @@ if __name__ == "__main__":
             checkpoint_dir=checkpoint_dir,
             seed=seed_choice,
             deck=deck_choice,
+            is_endless=is_endless,
         )
 
         if model:

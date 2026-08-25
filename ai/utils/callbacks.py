@@ -31,6 +31,12 @@ class BalatroMetricsCallback(BaseCallback):
         # Joker count (updated at episode end)
         self.joker_count = 0
 
+        # Chip-gain and consumable tracking
+        self._prev_chips = 0
+        self._prev_consumable_count = 0
+        self.total_consumables_used = 0
+        self.consumables_used_this_episode = 0
+
     def _win_pct(self):
         if self.total_episodes == 0:
             return 0.0
@@ -44,12 +50,22 @@ class BalatroMetricsCallback(BaseCallback):
         for done, info in zip(dones, infos):
             self.current_run_length += 1
 
-            # Track hand type every step (info is always populated now)
+            # Chip-gain based hand tracking
+            curr_chips = info.get("chips", 0)
+            chip_gain = curr_chips - self._prev_chips
             hand_type = info.get("hand_type", "None")
-            hand_score = info.get("hand_score", 0)
-            if hand_type and hand_type != "None" and hand_score > 0:
+            if chip_gain > 0 and hand_type and hand_type != "None":
                 self.hand_type_counts[hand_type] += 1
-                self.hand_type_scores[hand_type].append(hand_score)
+                self.hand_type_scores[hand_type].append(chip_gain)
+            self._prev_chips = curr_chips
+
+            # Consumable usage detection
+            curr_consumables = info.get("consumable_count", 0)
+            if curr_consumables < self._prev_consumable_count:
+                used = self._prev_consumable_count - curr_consumables
+                self.total_consumables_used += used
+                self.consumables_used_this_episode += used
+            self._prev_consumable_count = curr_consumables
 
             if info.get("blind_cleared", False):
                 self.total_blind_clears += 1
@@ -117,6 +133,14 @@ class BalatroMetricsCallback(BaseCallback):
                     self.logger.record(f"hands/avg_score_{safe_name}", avg_score)
 
             self.logger.record("custom/joker_count", self.joker_count)
+            self.logger.record("game/rounds_this_episode",        round_)
+            self.logger.record("custom/consumables_used_episode", self.consumables_used_this_episode)
+            self.logger.record("custom/total_consumables_used",   self.total_consumables_used)
+
+            # Reset per-episode counters
+            self._prev_chips = 0
+            self._prev_consumable_count = 0
+            self.consumables_used_this_episode = 0
 
             needs_dump = True
 

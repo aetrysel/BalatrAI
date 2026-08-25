@@ -3,6 +3,8 @@
 
 local O = {}
 
+local last_hand_info = { handname = "None", score = 0 }
+
 function O.get_game_state()
     local game_over = 0
     if G.STATE == G.STATES.GAME_OVER then
@@ -105,7 +107,13 @@ function O.get_current_hand_scoring()
         handname = G.GAME.current_round.current_hand.handname or "None"
     end
 
-    return { chips = chips, mult = mult, score = score, handname = handname }
+    if handname and handname ~= "None" and handname ~= "" then
+        last_hand_info.handname = handname
+        last_hand_info.score = score
+    end
+
+    return { chips = chips, mult = mult, score = score, handname = handname,
+             last_handname = last_hand_info.handname, last_score = last_hand_info.score }
 end
 
 function O.get_gold()
