@@ -26,6 +26,7 @@ ACTIONS.BUY_BOOSTER      = 13
 ACTIONS.USE_CONSUMABLE   = 14
 ACTIONS.SELECT_PACK_CARD = 15
 ACTIONS.SKIP_BOOSTER     = 16
+ACTIONS.SKIP_BLIND       = 17
 
 local ACTION_IDS = {
     select_hand      = ACTIONS.SELECT_HAND,
@@ -44,6 +45,7 @@ local ACTION_IDS = {
     use_consumable   = ACTIONS.USE_CONSUMABLE,
     select_pack_card = ACTIONS.SELECT_PACK_CARD,
     skip_booster     = ACTIONS.SKIP_BOOSTER,
+    skip_blind       = ACTIONS.SKIP_BLIND,
 }
 
 local ID_TO_ACTION = {
@@ -63,6 +65,7 @@ local ID_TO_ACTION = {
     [ACTIONS.USE_CONSUMABLE]   = "use_consumable",
     [ACTIONS.SELECT_PACK_CARD] = "select_pack_card",
     [ACTIONS.SKIP_BOOSTER]     = "skip_booster",
+    [ACTIONS.SKIP_BLIND]       = "skip_blind",
 }
 
 local function is_pack_state()
@@ -97,7 +100,19 @@ local action_registry = {
             return input.select_blind()
         end,
         available_when = function()
-            return G.STATE == G.STATES.BLIND_SELECT and G.GAME.blind_on_deck ~= nil and not action_state.select_blind
+            return G.STATE == G.STATES.BLIND_SELECT and G.GAME.blind_on_deck ~= nil and not action_state.select_blind and utils.is_game_ready_for_action()
+        end,
+    },
+    skip_blind = {
+        execute = function(params)
+            return input.skip_blind()
+        end,
+        available_when = function()
+            return G.STATE == G.STATES.BLIND_SELECT
+                and G.GAME.blind_on_deck ~= nil
+                and G.GAME.blind_on_deck ~= 'Boss'
+                and not action_state.skip_blind
+                and utils.is_game_ready_for_action()
         end,
     },
     select_hand = {

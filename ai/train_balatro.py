@@ -153,7 +153,7 @@ def create_model(env, model_path=None):
     model = MaskablePPO(
         "MlpPolicy",
         env,
-        verbose=1,
+        verbose=0,
         learning_rate=3e-4,
         #CHANGE BASED ON HOW MANY TRAINING STEPS
         n_steps=4096,

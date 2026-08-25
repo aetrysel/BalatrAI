@@ -271,10 +271,10 @@ function AI.should_auto_skip(current_state, available_actions)
         return true
     end
 
-    -- Auto-skip SELECT_BLIND in blind selection (action ID = 5)
-    if current_state.state == G.STATES.BLIND_SELECT and #available_actions == 1 and available_actions[1] == 5 then
-        return true
-    end
+    -- -- Auto-skip SELECT_BLIND in blind selection (action ID = 5)
+    -- if current_state.state == G.STATES.BLIND_SELECT and #available_actions == 1 and available_actions[1] == 5 then
+    --     return true
+    -- end
     if current_state.state == G.STATES.WIN and G.GAME.win then
         return true
     end

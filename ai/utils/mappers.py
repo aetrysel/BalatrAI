@@ -148,7 +148,7 @@ class BalatroStateMapper:
      17  available actions mask
     """
 
-    OBSERVATION_SIZE = 411
+    OBSERVATION_SIZE = 412
 
     def __init__(self, observation_size: int, max_actions: int):
         self.observation_size = observation_size
@@ -393,6 +393,7 @@ class BalatroActionMapper:
             13: 14,  # USE_CONSUMABLE
             14: 15,  # SELECT_PACK_CARD
             15: 16,  # SKIP_BOOSTER
+            16: 17,  # SKIP_BLIND
         }
 
         SHOP_STATE = 5

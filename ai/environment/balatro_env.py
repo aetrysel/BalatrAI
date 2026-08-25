@@ -56,7 +56,7 @@ class BalatroEnv(gym.Env):
         self.actions_taken = []
 
         # Action space constants
-        self.MAX_ACTIONS = 16        # actions 0-15 (balatro IDs 1-16)
+        self.MAX_ACTIONS = 17        # actions 0-16 (balatro IDs 1-17)
         self.MAX_CARDS = 8           # binary card selectors
         self.MAX_SHOP_SLOTS = 5      # shared by BUY_JOKER and BUY_BOOSTER
         self.MAX_JOKER_SLOTS = 5     # for SELL_JOKER
@@ -84,7 +84,7 @@ class BalatroEnv(gym.Env):
         ]))
 
         # Observation space
-        self.OBSERVATION_SIZE = 411
+        self.OBSERVATION_SIZE = 412
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
@@ -332,6 +332,7 @@ class BalatroEnv(gym.Env):
             1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5,
             7: 6, 8: 7, 9: 8, 10: 9, 11: 10,
             12: 11, 13: 12, 14: 13, 15: 14, 16: 15,
+            17: 16,
         }
 
         action_selection_mask = [False] * self.MAX_ACTIONS
@@ -393,6 +394,14 @@ class BalatroEnv(gym.Env):
                 joker_mask[i] = True
             action_masks.append(joker_mask)
 
+            action_masks.append([False] * self.MAX_CONSUMABLE_SLOTS)
+            action_masks.append([False] * self.MAX_PACK_SLOTS)
+
+        elif state_id == 7:  # BLIND_SELECT
+            for _ in range(self.MAX_CARDS):
+                action_masks.append([True, False])
+            action_masks.append([False] * self.MAX_SHOP_SLOTS)
+            action_masks.append([False] * self.MAX_JOKER_SLOTS)
             action_masks.append([False] * self.MAX_CONSUMABLE_SLOTS)
             action_masks.append([False] * self.MAX_PACK_SLOTS)
 
