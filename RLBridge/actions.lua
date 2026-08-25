@@ -100,7 +100,9 @@ local action_registry = {
             return input.select_blind()
         end,
         available_when = function()
-            return G.STATE == G.STATES.BLIND_SELECT and G.GAME.blind_on_deck ~= nil and not action_state.select_blind and utils.is_game_ready_for_action()
+            return G.STATE == G.STATES.BLIND_SELECT and G.GAME.blind_on_deck ~= nil
+                and not action_state.select_blind and not action_state.skip_blind
+                and utils.is_game_ready_for_action()
         end,
     },
     skip_blind = {
