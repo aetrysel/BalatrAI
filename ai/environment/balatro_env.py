@@ -16,6 +16,7 @@ from ..utils.communication import BalatroPipeIO, BalatroSocketIO
 from .reward import BalatroRewardCalculator
 from ..utils.mappers import BalatroStateMapper, BalatroActionMapper
 from ..utils.replay import ReplaySystem
+from ..utils.history_logger import HistoryLogger
 
 
 class BalatroEnv(gym.Env):
@@ -54,6 +55,10 @@ class BalatroEnv(gym.Env):
         # Replay System
         self.replay_system = ReplaySystem()
         self.actions_taken = []
+
+        # History logger
+        self.history_logger = HistoryLogger()
+        self._episode_count = 0
 
         # Action space constants
         self.MAX_ACTIONS = 17        # actions 0-16 (balatro IDs 1-17)
@@ -118,6 +123,8 @@ class BalatroEnv(gym.Env):
 
         # Reset reward tracking
         self.reward_calculator.reset()
+        self._episode_count += 1
+        self.history_logger.new_episode(self._episode_count)
         
         # Wait for initial request from Balatro (game start)
         initial_request = self.pipe_io.wait_for_request()
@@ -192,11 +199,19 @@ class BalatroEnv(gym.Env):
         game_state_early = next_request.get('game_state', {})
         if game_state_early.get('game_over', 0) == 1:
             observation = self.state_mapper.process_game_state(self.current_state)
+            # Inject game_over=1 into current_state so reward.py fires the penalty and
+            # captures game_over_blind_name/chips for CLI output, while keeping the real
+            # chip/blind values (the game-over state itself has chips=0).
+            game_over_state = {
+                **self.current_state,
+                'game_state': {**self.current_state.get('game_state', {}), 'game_over': 1}
+            }
             reward = self.reward_calculator.calculate_reward(
-                current_state=self.current_state,
+                current_state=game_over_state,
                 prev_state=self.prev_state or {},
             )
             self.restart_pending = True
+            self.history_logger.log_step(self.prev_state, response_data, next_request)
             last_gs = self.current_state.get('game_state', {})
             return observation, reward, True, False, {
                 "won": False,
@@ -249,7 +264,7 @@ class BalatroEnv(gym.Env):
                 chips=game_state.get('chips', 0)
             )
             terminated = not is_endless_enabled
-
+            self.history_logger.log_step(self.prev_state, response_data, next_request)
             return observation, reward, terminated, False, {
                 "won": True,
                 "ante": game_state.get('ante', 0),
@@ -295,15 +310,17 @@ class BalatroEnv(gym.Env):
             self.logger.error(f"Action mask error: {e}", exc_info=True)
             self._action_masks = np.ones(sum(self.action_space.nvec), dtype=bool)
 
+        self.history_logger.log_step(self.prev_state, response_data, next_request)
         return observation, reward, terminated, truncated, info
 
     def cleanup(self):
         """
         Clean up environment resources
-        
+
         Call this when shutting down to clean up pipe communication.
         """
         self.pipe_io.cleanup()
+        self.history_logger.close()
 
     # Action Masks for MaskablePPO and for ActionWrapper
     def action_masks(self):

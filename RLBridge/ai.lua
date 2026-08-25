@@ -307,7 +307,6 @@ function AI.execute_auto_skip_action(current_state, available_actions)
                     end
                 }))
             end
-            state_transition_timer = 2.0
             last_combined_hash = nil
             return
         end
@@ -318,7 +317,6 @@ function AI.execute_auto_skip_action(current_state, available_actions)
             -- utils.log_ai("Blind Beaten!")
             -- utils.log_ai("Cash out successful")
             cash_out_executed = true
-            state_transition_timer = 0.5
         else
             utils.log_ai("Cash out failed: " .. (result.error or "unknown"))
             last_combined_hash = nil  -- retry next frame

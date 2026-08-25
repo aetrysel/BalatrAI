@@ -10,6 +10,7 @@ class BalatroRewardCalculator:
         self.best_ante_reached = 1
 
         # Episode tracking
+        self._started = False
         self.episode_count = 0
         self.wins = 0
         self.episode_total_reward = 0
@@ -47,6 +48,7 @@ class BalatroRewardCalculator:
     PACK_STATE_IDS = {9, 10, 15, 17, 18}
 
     def calculate_reward(self, current_state, prev_state=None):
+        self._started = True
         reward = 0.0
         reward += self.calculate_shop_reward(current_state, prev_state)
         reward += self.calculate_pack_reward(current_state, prev_state)
@@ -192,6 +194,14 @@ class BalatroRewardCalculator:
         # Track peak chips for accurate game-over reporting
         self.highest_chips_this_blind = max(self.highest_chips_this_blind, current_chips)
 
+        # Print blind clear notification — ROUND_EVAL is auto-skipped on Lua side, so detect
+        # via state transition SELECTING_HAND(1) → SHOP(5)
+        prev_state_id = prev_game_state.get('state', 0)
+        curr_state_id = inner_game_state.get('state', 0)
+        if prev_state_id == 1 and curr_state_id == 5 and not self.blind_already_defeated:
+            print(f"✅ Blind cleared! Ante {self.current_blind_ante} - {self.current_blind_name} "
+                  f"| {self.highest_chips_this_blind}/{self.current_blind_chips} chips")
+
         # === USE_CONSUMABLE REWARD ===
         if prev_state:
             prev_consumable_count = len(prev_game_state.get('consumables', []))
@@ -277,6 +287,9 @@ class BalatroRewardCalculator:
 
     def reset(self):
         """Reset for new episode."""
+        if not self._started:
+            return
+
         self.episode_count += 1
 
         if self.current_ante > self.best_ante_reached:
@@ -290,6 +303,7 @@ class BalatroRewardCalculator:
             self._log_episode()
 
         # Reset episode state
+        self._started = False
         self.current_ante = 1
         self.previous_chips = 0
         self.previous_hand_played = "None"
