@@ -10,7 +10,6 @@ from typing import Dict, Any, Tuple, List, Optional
 import logging
 import os
 import gymnasium as gym
-from .. import global_var
 from gymnasium import spaces
 from ..utils.communication import BalatroPipeIO, BalatroSocketIO
 from .reward import BalatroRewardCalculator
@@ -31,15 +30,15 @@ class BalatroEnv(gym.Env):
     without knowing about the underlying pipe communication system.
     """
     
-    def __init__(self):
+    def __init__(self, seed=None, deck="Red Deck"):
         super().__init__()
         self.logger = logging.getLogger(__name__)
         self.current_state = None
         self.prev_state = None
         self.game_over = False
         self.restart_pending = False
-        #Change this to change the seed
-        self.seed = global_var.choosen_seed
+        self.seed = seed
+        self.deck = deck
 
         # Initialize communication system — swap transport based on env var
         if os.getenv("BALATRO_COMM_MODE") == "socket":
@@ -118,7 +117,7 @@ class BalatroEnv(gym.Env):
         
         if self.restart_pending:
             self.restart_pending = False
-            restart_response = {"action": 6, "params": [], "seed": self.seed}
+            restart_response = {"action": 6, "params": [], "seed": self.seed, "deck": self.deck}
             self.pipe_io.send_response(restart_response)
 
         # Reset reward tracking
@@ -132,7 +131,7 @@ class BalatroEnv(gym.Env):
             raise RuntimeError("Failed to receive initial request from Balatro")
         
         while initial_request.get('game_state', {}).get('state') == 4:
-            restart_response = {"action": 6, "params": [], "seed": self.seed}
+            restart_response = {"action": 6, "params": [], "seed": self.seed, "deck": self.deck}
 
             self.pipe_io.send_response(restart_response)
             initial_request = self.pipe_io.wait_for_request()
@@ -226,7 +225,7 @@ class BalatroEnv(gym.Env):
             }
         while next_request.get('game_state', {}).get('state') == 4:
             self.logger.info("Auto-handling START_RUN state, sending restart")
-            restart_response = {"action": 6, "params": [], "seed": self.seed}
+            restart_response = {"action": 6, "params": [], "seed": self.seed, "deck": self.deck}
 
             self.pipe_io.send_response(restart_response)
             next_request = self.pipe_io.wait_for_request()

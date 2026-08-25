@@ -1,1 +1,0 @@
-choosen_seed = "JFKGEEMG"

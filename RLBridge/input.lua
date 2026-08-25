@@ -21,6 +21,13 @@ function I.start_run(params)
         G.setup_seed = _seed
     end
 
+    if params and params.deck and G.GAME then
+        local deck_center = get_deck_from_name(params.deck)
+        if deck_center then
+            G.GAME.selected_back = Back(deck_center)
+        end
+    end
+
     G.FUNCS.start_run(nil, {
         stake = _stake,
         seed = _seed,
