@@ -40,6 +40,8 @@ class BalatroRewardCalculator:
         self.total_jokers = 0
         self.peak_money = 0
 
+        self.episode_reward_breakdown: list[str] = []
+
         self.REWARD_THRESHOLDS = {
             "excellent": 75.0,
             "good": 40.0,
@@ -58,6 +60,7 @@ class BalatroRewardCalculator:
 
     def calculate_shop_reward(self, current_state, prev_state=None):
         reward = 0.0
+        breakdown: list[str] = []
         current_game_state = current_state.get('game_state', {})
         prev_game_state = prev_state.get('game_state', {}) if prev_state else {}
 
@@ -72,31 +75,40 @@ class BalatroRewardCalculator:
 
         if jokers_gained > 0:
             reward += 10.0 * jokers_gained
+            breakdown.append(f"jokers_gained x{jokers_gained}: +{10.0 * jokers_gained:.1f}")
 
         if jokers_sold > 0:
             reward -= 1.0 * jokers_sold
+            breakdown.append(f"jokers_sold x{jokers_sold}: -{1.0 * jokers_sold:.1f}")
 
         if current_money > prev_money and money_spent <= 0:
             money_gained = current_money - prev_money
             reward += money_gained * 0.5
+            breakdown.append(f"money_earned +{money_gained}: +{money_gained * 0.5:.2f}")
 
         if money_spent > 0:
             if jokers_gained > 0:
                 efficiency = min(1.0, money_spent / max(1, current_money + money_spent))
                 reward += 0.5 * (1.0 - efficiency)
+                breakdown.append(f"joker_efficiency: +{0.5 * (1.0 - efficiency):.2f}")
             else:
-                reward -= 0.3 * np.log1p(money_spent)
+                penalty = 0.3 * np.log1p(money_spent)
+                reward -= penalty
+                breakdown.append(f"money_spent_penalty -{money_spent}: -{penalty:.2f}")
 
         max_joker_slots = 5
         utilization = len(current_jokers) / max_joker_slots
         reward += utilization * 0.5
+        breakdown.append(f"joker_utilization ({len(current_jokers)}/5): +{utilization * 0.5:.2f}")
 
         if current_money == 0 and len(current_jokers) == 0:
             reward -= 3.0
+            breakdown.append("broke_no_jokers: -3.00")
 
         retry_count = current_game_state.get('retry_count', 0)
         if retry_count > 0:
             reward -= 0.5 * retry_count
+            breakdown.append(f"retry_penalty x{retry_count}: -{0.5 * retry_count:.2f}")
 
         # Update tracking
         self.previous_money = current_money
@@ -109,13 +121,20 @@ class BalatroRewardCalculator:
         curr_has_voucher = any(it.get('type') == 'voucher' for it in curr_shop_items)
         if prev_had_voucher and not curr_has_voucher and money_spent > 0:
             reward += 8.0
+            breakdown.append("voucher_purchased: +8.00")
 
         prev_state_id = prev_game_state.get('state', 0)
         curr_state_id = current_game_state.get('state', 0)
         if prev_state_id == 5 and curr_state_id in self.PACK_STATE_IDS:
             reward += 3.0
+            breakdown.append("entered_pack: +3.00")
 
-        return float(np.tanh(reward / 5.0) * 5.0)
+        scaled = float(np.tanh(reward / 5.0) * 5.0)
+        if breakdown:
+            self.episode_reward_breakdown.append(
+                f"[SHOP] raw={reward:.2f} → scaled={scaled:.2f}: " + "; ".join(breakdown)
+            )
+        return scaled
 
     def calculate_pack_reward(self, current_state, prev_state=None) -> float:
         reward = 0.0
@@ -154,6 +173,11 @@ class BalatroRewardCalculator:
             elif prev_state_id == 17:
                 reward += 1.0
 
+        if reward != 0.0:
+            pack_names = {9: "TAROT_PACK", 10: "PLANET_PACK", 15: "SPECTRAL_PACK", 17: "STANDARD_PACK", 18: "BUFFOON_PACK"}
+            self.episode_reward_breakdown.append(
+                f"[PACK] {pack_names.get(prev_state_id, f'PACK_{prev_state_id}')}: +{reward:.2f}"
+            )
         return float(reward)
 
     def calculate_play_reward(self, current_state: Dict[str, Any],
@@ -203,6 +227,7 @@ class BalatroRewardCalculator:
             curr_consumable_count = len(inner_game_state.get('consumables', []))
             if curr_consumable_count < prev_consumable_count and inner_game_state.get('state', 0) == 1:
                 reward += 2.0
+                reward_breakdown.append("use_consumable: +2.00")
 
         # === RETRY PENALTY ===
         if retry_count > 0:
@@ -258,6 +283,7 @@ class BalatroRewardCalculator:
         if ante > self.current_ante:
             ante_progress_bonus = 10.0 * ante
             reward += ante_progress_bonus
+            reward_breakdown.append(f"ante_progression ante {ante}: +{ante_progress_bonus:.1f}")
             self.current_ante = ante
 
         # === BOSS BLIND BONUS ===
@@ -265,6 +291,7 @@ class BalatroRewardCalculator:
         is_boss = blind_name_val not in ['Small Blind', 'Big Blind', 'None', '']
         if (blind_cleared_flag or game_won) and is_boss and self.blind_already_defeated:
             reward += 15.0 * ante
+            reward_breakdown.append(f"boss_blind_bonus ante {ante}: +{15.0 * ante:.1f}")
 
         # === GAME OVER PENALTY ===
         if game_over == 1 and not hasattr(self, 'game_over_penalty_applied') and not self.blind_already_defeated:
@@ -276,6 +303,9 @@ class BalatroRewardCalculator:
             self.game_over_blind_chips = self.current_blind_chips if self.current_blind_chips else blind_chips
             self.game_over_blind_name = self.current_blind_name if self.current_blind_name else blind_name
             self.game_over_ante = self.current_blind_ante if self.current_blind_ante else ante
+
+        if reward_breakdown:
+            self.episode_reward_breakdown.extend([f"[PLAY] {e}" for e in reward_breakdown])
 
         self.episode_total_reward += reward
         self.previous_chips = current_chips
@@ -329,6 +359,7 @@ class BalatroRewardCalculator:
         self.previous_money = 0
         self.total_jokers = 0
         self.peak_money = 0
+        self.episode_reward_breakdown = []
 
         if hasattr(self, 'game_over_penalty_applied'):
             delattr(self, 'game_over_penalty_applied')
