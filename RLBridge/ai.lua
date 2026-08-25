@@ -169,6 +169,9 @@ function AI.update()
             if pending_action.seed then
                 exec_params.seed = pending_action.seed
             end
+            if pending_action.deck then
+                exec_params.deck = pending_action.deck
+            end
             local result = action.execute_action(pending_action.action, exec_params)
             if result.success then
                 utils.log_ai("Action executed successfully: " .. pending_action.action)
@@ -330,9 +333,18 @@ function AI.execute_auto_skip_action(current_state, available_actions)
     utils.log_ai("Auto-executing action: " .. action.get_action_name(action_id))
     
     local exec_params = {}
-    --Chnage this to change the seed
-    if action_id == 4 then 
-        exec_params.seed = "JFKGEEMG"
+    if action_id == 4 then
+        local config_path = "/tmp/balatro_run_config.json"
+        local f = io.open(config_path, "r")
+        if f then
+            local dkjson = require("dkjson")
+            local config = dkjson.decode(f:read("*all"))
+            f:close()
+            if config then
+                exec_params.seed = config.seed
+                exec_params.deck = config.deck
+            end
+        end
     end
     local result = action.execute_action(action_id, exec_params)
     if result.success then

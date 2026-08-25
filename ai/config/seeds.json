@@ -1,0 +1,6 @@
+{
+  "seeds": [
+    {"name": "training", "value": "JFKGEEMG"},
+    {"name": "testing", "value": "FK76PMFU"}
+  ]
+}
