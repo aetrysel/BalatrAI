@@ -223,7 +223,7 @@ Reward clipped to [−25, +500].
 
 ## Communication with Claude
 - Please keep chats as efficient as possible and brief. No fluff talk, just get to the point
+- Please do NOT remove existing comments from the code
 - Try to break things down in first principles effectively
 - Do not add explanatory comments about why values changed (e.g., "# Changed from X to Y because...") - just use the correct values
 - Comments should explain what something does, not why it was modified
-- Please do NOT remove existing comments from the code

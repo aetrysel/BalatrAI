@@ -175,6 +175,7 @@ local action_registry = {
                 and G.shop_jokers
                 and G.shop_jokers.cards
                 and #G.shop_jokers.cards > 0
+                and utils.is_game_ready_for_action()
         end,
     },
     sell_joker = {
@@ -185,6 +186,7 @@ local action_registry = {
         available_when = function()
             return G.STATE == G.STATES.SHOP
                 and G.jokers and #G.jokers.cards > 0
+                and utils.is_game_ready_for_action()
         end,
     },
     reroll_shop = {
@@ -194,6 +196,7 @@ local action_registry = {
         available_when = function()
             return G.STATE == G.STATES.SHOP
                 and G.GAME.dollars >= G.GAME.current_round.reroll_cost
+                and utils.is_game_ready_for_action()
         end,
     },
     skip_shop = {
@@ -201,7 +204,7 @@ local action_registry = {
             return input.skip_shop()
         end,
         available_when = function()
-            return G.STATE == G.STATES.SHOP
+            return G.STATE == G.STATES.SHOP and utils.is_game_ready_for_action()
         end,
     },
     cash_out = {

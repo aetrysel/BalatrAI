@@ -256,27 +256,27 @@ function AI.should_auto_skip(current_state, available_actions)
         return false
     end
 
-    -- Auto-skip ROUND_EVAL
-    if current_state.state == G.STATES.ROUND_EVAL then
-        local is_busy = false
-        if G.CONTROLLER and G.CONTROLLER.queue and G.CONTROLLER.locks then
-            local queue_size = #G.CONTROLLER.queue
-            local locks_size = 0
-            for _ in pairs(G.CONTROLLER.locks) do locks_size = locks_size + 1 end
+    -- -- Auto-skip ROUND_EVAL
+    -- if current_state.state == G.STATES.ROUND_EVAL then
+    --     local is_busy = false
+    --     if G.CONTROLLER and G.CONTROLLER.queue and G.CONTROLLER.locks then
+    --         local queue_size = #G.CONTROLLER.queue
+    --         local locks_size = 0
+    --         for _ in pairs(G.CONTROLLER.locks) do locks_size = locks_size + 1 end
 
-            if queue_size > 0 or locks_size > 0 then
-                is_busy = true
-            end
-        end
+    --         if queue_size > 0 or locks_size > 0 then
+    --             is_busy = true
+    --         end
+    --     end
 
-        if is_busy then
-            return false
-        end
+    --     if is_busy then
+    --         return false
+    --     end
 
-        if #available_actions > 0 and not cash_out_executed then
-            return true
-        end
-    end
+    --     if #available_actions > 0 and not cash_out_executed then
+    --         return true
+    --     end
+    -- end
 
     return false
 end
@@ -307,6 +307,7 @@ function AI.execute_auto_skip_action(current_state, available_actions)
                     end
                 }))
             end
+            -- state_transition_timer = 30.0
             last_combined_hash = nil
             return
         end
@@ -317,6 +318,7 @@ function AI.execute_auto_skip_action(current_state, available_actions)
             -- utils.log_ai("Blind Beaten!")
             -- utils.log_ai("Cash out successful")
             cash_out_executed = true
+            -- state_transition_timer = 0.5
         else
             utils.log_ai("Cash out failed: " .. (result.error or "unknown"))
             last_combined_hash = nil  -- retry next frame
