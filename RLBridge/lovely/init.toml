@@ -1,4 +1,7 @@
 [manifest]
+name = "RLBridge"
+author = "Aetrysel, WoodrowtheFox, Illuminatrixer"
+description = "RL training bridge — pipe- and socket-based AI control of Balatro for reinforcement learning - Based on the work of Angel Vee"
 version = "1.0.0"
 priority = -10
 
