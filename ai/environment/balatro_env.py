@@ -197,13 +197,18 @@ class BalatroEnv(gym.Env):
                 prev_state=self.prev_state or {},
             )
             self.restart_pending = True
+            last_gs = self.current_state.get('game_state', {})
             return observation, reward, True, False, {
-                "ante": game_state_early.get('ante', 0),
-                "round": game_state_early.get('round_count', 0),
-                "chips": game_state_early.get('chips', 0),
                 "won": False,
-                "jokers": game_state_early.get('jokers', [])
-                }
+                "ante": last_gs.get('ante', 0),
+                "round": last_gs.get('round_count', 0),
+                "chips": last_gs.get('chips', 0),
+                "blind_chips": last_gs.get('blind_chips', 0),
+                "blind_cleared": False,
+                "hand_type": last_gs.get('current_hand', {}).get('handname', 'None'),
+                "hand_score": last_gs.get('current_hand', {}).get('score', 0),
+                "jokers": last_gs.get('jokers', []),
+            }
         while next_request.get('game_state', {}).get('state') == 4:
             self.logger.info("Auto-handling START_RUN state, sending restart")
             restart_response = {"action": 6, "params": [], "seed": self.seed}
@@ -233,7 +238,6 @@ class BalatroEnv(gym.Env):
             reward = self.reward_calculator.calculate_reward(
                 current_state=self.current_state,
                 prev_state=self.prev_state or {},
-                phase=self.current_state,
             )
 
             # Save replay
@@ -244,16 +248,20 @@ class BalatroEnv(gym.Env):
                 score=reward,
                 chips=game_state.get('chips', 0)
             )
-            terminated = not is_endless_enabled 
+            terminated = not is_endless_enabled
 
             return observation, reward, terminated, False, {
+                "won": True,
                 "ante": game_state.get('ante', 0),
                 "round": game_state.get('round_count', 0),
                 "chips": game_state.get('chips', 0),
-                "won": True,
+                "blind_chips": game_state.get('blind_chips', 0),
+                "blind_cleared": game_state.get('blind_cleared', 0) == 1,
+                "hand_type": game_state.get('current_hand', {}).get('handname', 'None'),
+                "hand_score": game_state.get('current_hand', {}).get('score', 0),
                 "jokers": jokers,
-                "win_detected": True, 
-                "is_endless": is_endless_enabled
+                "win_detected": True,
+                "is_endless": is_endless_enabled,
             }
         # Process new state for SB3
         observation = self.state_mapper.process_game_state(self.current_state)
@@ -262,13 +270,23 @@ class BalatroEnv(gym.Env):
             current_state=self.current_state,
             prev_state=self.prev_state if self.prev_state else {}
         )
-        done = False
-            
-        terminated = done
-        truncated = False 
-        
+        terminated = False
+        truncated = False
+
+        # Build info dict for every step (enables callback metrics)
+        info = {
+            "won": False,
+            "ante": game_state.get('ante', 0),
+            "round": game_state.get('round_count', 0),
+            "chips": game_state.get('chips', 0),
+            "blind_chips": game_state.get('blind_chips', 0),
+            "blind_cleared": game_state.get('blind_cleared', 0) == 1,
+            "hand_type": game_state.get('current_hand', {}).get('handname', 'None'),
+            "hand_score": game_state.get('current_hand', {}).get('score', 0),
+            "jokers": game_state.get('jokers', []),
+        }
+
         # Create action mask for MaskablePPO
-        info = {}
         try:
             available_actions = next_request.get('available_actions', [])
             action_mask = self._create_action_mask(available_actions, self.current_state)

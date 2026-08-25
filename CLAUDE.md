@@ -48,7 +48,14 @@ The mod uses `RLBridge/lovely/` to define patches:
 - `ai.toml` — hooks `G:update(dt)` to call `AI.update()` every frame
 - Any additional patch can be created by adding a `.toml` file in the lovely dir
 
+### Balatro Source Code
+The `balatro-source-code/` directory contains the decompiled Balatro source code for reference and understanding game internals.
+Editing this file won't do nothing so don't edit it, it's just reference
+
 ## Development Setup
+
+### Linux Native (on this machine)
+
 
 ### Linux with Proton (Steam)
 Create a symlink to the Steam mods directory:
@@ -219,3 +226,4 @@ Reward clipped to [−25, +500].
 - Try to break things down in first principles effectively
 - Do not add explanatory comments about why values changed (e.g., "# Changed from X to Y because...") - just use the correct values
 - Comments should explain what something does, not why it was modified
+- Please do NOT remove existing comments from the code
