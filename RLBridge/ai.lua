@@ -16,7 +16,6 @@ local rl_training_active = false
 local last_key_pressed = nil
 local cash_out_executed = false
 local retry_count = 0
-local state_transition_timer = 0
 
 local blind_forced = false
 local blind_force_timer = 0
@@ -68,12 +67,6 @@ function AI.update()
     if G.CONTROLLER.locking_buttons or G.CONTROLLER.interrupt_inputs or G.CONTROLLER.locks[1] then
         return 
     end
-    -- Check for key press to start/stop RL training
-    if state_transition_timer > 0 then
-        state_transition_timer = state_transition_timer - (G.FPS_CAP and (1/G.FPS_CAP) or 0.016)
-        return -- Exit early, we are in cooldown
-    end
-
     if last_key_pressed then
         if last_key_pressed == "r" then
             if not rl_training_active then
@@ -179,28 +172,8 @@ function AI.update()
             local result = action.execute_action(pending_action.action, exec_params)
             if result.success then
                 utils.log_ai("Action executed successfully: " .. pending_action.action)
-                if pending_action.action == 11 or current_state.state == G.STATES.ROUND_EVAL then
-                    state_transition_timer = 0.25
-                elseif pending_action.action == 5 then
-                    state_transition_timer = 0.5
-                elseif pending_action.action == 13 then -- BUY_BOOSTER triggers pack state
-                    state_transition_timer = 0.5
-                elseif pending_action.action == 15 or pending_action.action == 16 then -- pack card select/skip
-                    state_transition_timer = 0.3
-                elseif pending_action.action == 14 then -- USE_CONSUMABLE
-                    state_transition_timer = 0.3
-                elseif current_state.state == G.STATES.BLIND_SELECT then
-                    state_transition_timer = 0.5
-                elseif current_state.state == G.STATES.SHOP then
-                    state_transition_timer = 0.1
-                elseif is_pack_state(current_state.state) then
-                    state_transition_timer = 0.2
-                else
-                    state_transition_timer = 0.01
-                end
-                retry_count = 0  -- Reset retry count on success
+                retry_count = 0
                 pending_action = nil
-                last_combined_hash = AI.hash_combined_state(output.get_game_state(), action.get_available_actions())
                 utils.log_ai("\n\n\n")
             else
                 utils.log_ai("Action failed: " .. (result.error or "Unknown error"))

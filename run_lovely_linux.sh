@@ -1,0 +1,1 @@
+/home/saga/dev/Balatro/run_lovely_linux.sh

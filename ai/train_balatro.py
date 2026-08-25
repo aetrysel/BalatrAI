@@ -224,7 +224,7 @@ def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resu
             total_timesteps=total_timesteps,
             callback=callbacks,
             progress_bar=True,
-            tb_log_name="Claude_FULL_SHOP",   
+            tb_log_name="Claude_skip_blinds",   
         )
         
         training_time = time.time() - start_time
