@@ -1,6 +1,6 @@
 """
 History logger — writes a human-readable record of the bot's actions and their effects.
-One log file per training session, stored in logs/.
+One log file per training session, stored in action_history_logs/.
 """
 
 import os
@@ -33,7 +33,7 @@ def _card_str(card):
 
 
 class HistoryLogger:
-    def __init__(self, log_dir="logs"):
+    def __init__(self, log_dir="action_history_logs"):
         Path(log_dir).mkdir(exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_path = os.path.join(log_dir, f"history_{ts}.log")

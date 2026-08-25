@@ -379,7 +379,7 @@ class BalatroRewardCalculator:
 
     def _log_episode(self):
         if self.game_over_blind_name:
-            header = (f"Died to ante {self.game_over_ante} {self.game_over_blind_name} "
+            header = (f"Defeated by Ante {self.game_over_ante} {self.game_over_blind_name} "
                       f"({self.game_over_chips}/{self.game_over_blind_chips} chips)")
         else:
             header = f"{self.highest_chips_this_blind} chips"
