@@ -1,5 +1,5 @@
 from stable_baselines3.common.callbacks import BaseCallback
-from collections import defaultdict
+from collections import defaultdict, deque
 
 class BalatroMetricsCallback(BaseCallback):
     def __init__(self, log_freq=10, verbose=1):
@@ -37,6 +37,24 @@ class BalatroMetricsCallback(BaseCallback):
         self.total_consumables_used = 0
         self.consumables_used_this_episode = 0
 
+        # Money tracking
+        self._prev_gold = 0
+        self.episode_money_earned = 0.0
+        self.episode_money_spent = 0.0
+        self.max_money_ever = 0
+
+        # Play/Discard tracking
+        self.episode_plays = 0
+        self.episode_discards = 0
+
+        # Blind skip tracking (cumulative across all episodes)
+        self.total_blind_selections = 0
+        self.total_blind_skips = 0
+
+        # Rolling hand-type window (last 100 episodes)
+        self.recent_hand_episodes = deque(maxlen=100)
+        self._episode_hand_counts = defaultdict(int)
+
     def _win_pct(self):
         if self.total_episodes == 0:
             return 0.0
@@ -57,6 +75,7 @@ class BalatroMetricsCallback(BaseCallback):
             if chip_gain > 0 and hand_type and hand_type != "None":
                 self.hand_type_counts[hand_type] += 1
                 self.hand_type_scores[hand_type].append(chip_gain)
+                self._episode_hand_counts[hand_type] += 1
             self._prev_chips = curr_chips
 
             # Consumable usage detection
@@ -66,6 +85,27 @@ class BalatroMetricsCallback(BaseCallback):
                 self.total_consumables_used += used
                 self.consumables_used_this_episode += used
             self._prev_consumable_count = curr_consumables
+
+            # Money tracking
+            gold = info.get("gold", 0)
+            if gold > self._prev_gold:
+                self.episode_money_earned += gold - self._prev_gold
+            elif gold < self._prev_gold:
+                self.episode_money_spent += self._prev_gold - gold
+            if gold > self.max_money_ever:
+                self.max_money_ever = gold
+            self._prev_gold = gold
+
+            # Play/Discard + Blind skip tracking
+            action_taken = info.get("action_taken", 0)
+            if action_taken == 2:
+                self.episode_plays += 1
+            elif action_taken == 3:
+                self.episode_discards += 1
+            elif action_taken in {5, 17}:
+                self.total_blind_selections += 1
+                if action_taken == 17:
+                    self.total_blind_skips += 1
 
             if info.get("blind_cleared", False):
                 self.total_blind_clears += 1
@@ -125,6 +165,8 @@ class BalatroMetricsCallback(BaseCallback):
             total_hands = sum(self.hand_type_counts.values()) or 1
             for ht in hand_types:
                 count = self.hand_type_counts[ht]
+                if count == 0:
+                    continue
                 safe_name = ht.replace(" ", "_").lower()
                 self.logger.record(f"hands/count_{safe_name}", count)
                 self.logger.record(f"hands/pct_{safe_name}",   count / total_hands)
@@ -137,10 +179,41 @@ class BalatroMetricsCallback(BaseCallback):
             self.logger.record("custom/consumables_used_episode", self.consumables_used_this_episode)
             self.logger.record("custom/total_consumables_used",   self.total_consumables_used)
 
+            # Money metrics
+            self.logger.record("money/episode_earned", self.episode_money_earned)
+            self.logger.record("money/episode_spent",  self.episode_money_spent)
+            self.logger.record("money/max_ever_held",  self.max_money_ever)
+
+            # Action ratio metrics
+            self.logger.record("actions/play_discard_ratio",
+                               self.episode_plays / max(1, self.episode_discards))
+            self.logger.record("actions/blind_skip_rate",
+                               self.total_blind_skips / max(1, self.total_blind_selections))
+
+            # Rolling hand-type frequency (last 100 episodes, only played types)
+            self.recent_hand_episodes.append(dict(self._episode_hand_counts))
+            recent_totals = defaultdict(int)
+            for ep_counts in self.recent_hand_episodes:
+                for ht, cnt in ep_counts.items():
+                    recent_totals[ht] += cnt
+            recent_total = sum(recent_totals.values()) or 1
+            for ht in hand_types:
+                if recent_totals[ht] == 0:
+                    continue
+                safe_name = ht.replace(" ", "_").lower()
+                self.logger.record(f"hands/pct_{safe_name}_last_100",
+                                   recent_totals[ht] / recent_total)
+
             # Reset per-episode counters
             self._prev_chips = 0
             self._prev_consumable_count = 0
             self.consumables_used_this_episode = 0
+            self.episode_money_earned = 0.0
+            self.episode_money_spent = 0.0
+            self.episode_plays = 0
+            self.episode_discards = 0
+            self._episode_hand_counts = defaultdict(int)
+            self._prev_gold = 0
 
             needs_dump = True
 

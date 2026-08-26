@@ -217,6 +217,8 @@ class BalatroEnv(gym.Env):
                 "hand_score": current_gs.get('current_hand', {}).get('last_score', 0),
                 "jokers": current_gs.get('jokers', []),
                 "consumable_count": len(current_gs.get('consumables', [])),
+                "gold": current_gs.get('gold', 0),
+                "action_taken": response_data.get('action', 0),
             }
             if not self.is_endless:
                 # Non-endless: Lua WIN auto-skip handles 30s screen then restart
@@ -277,6 +279,8 @@ class BalatroEnv(gym.Env):
                 "hand_score": last_gs.get('current_hand', {}).get('last_score', 0),
                 "jokers": last_gs.get('jokers', []),
                 "consumable_count": len(last_gs.get('consumables', [])),
+                "gold": last_gs.get('gold', 0),
+                "action_taken": response_data.get('action', 0),
             }
         while next_request.get('game_state', {}).get('state') == 4:
             self.logger.info("Auto-handling START_RUN state, sending restart")
@@ -320,6 +324,8 @@ class BalatroEnv(gym.Env):
             "hand_score": game_state.get('current_hand', {}).get('last_score', 0),
             "jokers": game_state.get('jokers', []),
             "consumable_count": len(game_state.get('consumables', [])),
+            "gold": game_state.get('gold', 0),
+            "action_taken": response_data.get('action', 0),
         }
 
         # Create action mask for MaskablePPO
