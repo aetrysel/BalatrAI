@@ -35,10 +35,13 @@ def _card_str(card):
 
 
 class HistoryLogger:
-    def __init__(self, log_dir="action_history_logs"):
+    def __init__(self, log_dir="action_history_logs", run_label: str = ""):
         Path(log_dir).mkdir(exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_path = os.path.join(log_dir, f"history_{ts}.log")
+        if run_label:
+            log_path = os.path.join(log_dir, f"history_{run_label}.log")
+        else:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            log_path = os.path.join(log_dir, f"history_{ts}.log")
         self._file = open(log_path, 'a', buffering=1)
         self.episode = 0
         self._file_line_count = 0
@@ -55,7 +58,7 @@ class HistoryLogger:
 
         session_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._write(f"{'='*70}")
-        self._write(f"Training session: {session_ts}")
+        self._write(f"Training session: {session_ts}" + (f"  |  Run: {run_label}" if run_label else ""))
         self._write(f"{'='*70}")
 
     def _write(self, line: str) -> None:

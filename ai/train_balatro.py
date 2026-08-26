@@ -240,9 +240,9 @@ def mask_fn(env):
     return env.action_masks()
 
 
-def create_environment(seed=None, deck="Red Deck", is_endless=False):
+def create_environment(seed=None, deck="Red Deck", is_endless=False, run_label: str = ""):
     """Create and wrap the Balatro environment"""
-    env = BalatroEnv(seed=seed, deck=deck, is_endless=is_endless)
+    env = BalatroEnv(seed=seed, deck=deck, is_endless=is_endless, run_label=run_label)
     env = ActionMasker(env, mask_fn)
     env = Monitor(env, filename="training_monitor.csv")
     return env
@@ -295,7 +295,7 @@ def create_callbacks(save_freq=1000, checkpoint_dir="./models/"):
     return callbacks
 
 
-def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resume_from=None, checkpoint_dir="./models/", seed=None, deck="Red Deck", is_endless=False):
+def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resume_from=None, checkpoint_dir="./models/", seed=None, deck="Red Deck", is_endless=False, run_label: str = ""):
     """
     Main training function
 
@@ -312,7 +312,7 @@ def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resu
     logger.info(f"Training for {total_timesteps} timesteps")
 
     try:
-        env = create_environment(seed=seed, deck=deck, is_endless=is_endless)
+        env = create_environment(seed=seed, deck=deck, is_endless=is_endless, run_label=run_label)
 
         if resume_from and Path(resume_from).exists():
             logger.info(f"Resuming training from: {resume_from}")
@@ -330,7 +330,7 @@ def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resu
             total_timesteps=total_timesteps,
             callback=callbacks,
             progress_bar=True,
-            tb_log_name="Claude_skip_blinds",
+            tb_log_name="Claude_new_tb_metrics",
         )
 
         training_time = time.time() - start_time
@@ -469,6 +469,8 @@ if __name__ == "__main__":
             Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
             print(f"Starting fresh. Checkpoints → {checkpoint_dir}")
 
+        run_label = Path(checkpoint_dir).name
+
         model = train_agent(
             total_timesteps=training_steps,
             save_path=f"{checkpoint_dir}balatro_trained",
@@ -477,6 +479,7 @@ if __name__ == "__main__":
             seed=seed_choice,
             deck=deck_choice,
             is_endless=is_endless,
+            run_label=run_label,
         )
 
         if model:

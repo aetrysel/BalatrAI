@@ -30,7 +30,7 @@ class BalatroEnv(gym.Env):
     without knowing about the underlying pipe communication system.
     """
     
-    def __init__(self, seed=None, deck="Red Deck", is_endless=False, stake: str = "White"):
+    def __init__(self, seed=None, deck="Red Deck", is_endless=False, stake: str = "White", run_label: str = ""):
         super().__init__()
         self.logger = logging.getLogger(__name__)
         self.current_state = None
@@ -58,7 +58,7 @@ class BalatroEnv(gym.Env):
         self.actions_taken = []
 
         # History logger
-        self.history_logger = HistoryLogger()
+        self.history_logger = HistoryLogger(run_label=run_label)
         self._episode_count = 0
 
         # Action space constants
