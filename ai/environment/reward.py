@@ -248,7 +248,7 @@ class BalatroRewardCalculator:
             self._track_hand_played(chip_gain, hand_type_to_use, current_chips, blind_chips)
 
             chip_percentage = (chip_gain / blind_chips) * 100
-            chip_reward = float(np.clip(chip_percentage**2 / 500, 0, 20))
+            chip_reward = float(np.clip(chip_percentage * 0.2, 0, 20))
             reward += chip_reward
             reward_breakdown.append(f"Chip gain: +{chip_gain} ({chip_percentage:.1f}% of blind): +{chip_reward:.2f}")
 
@@ -295,12 +295,16 @@ class BalatroRewardCalculator:
 
         # === GAME OVER PENALTY ===
         if game_over == 1 and not hasattr(self, 'game_over_penalty_applied') and not self.blind_already_defeated:
-            reward -= 20.0
-            reward_breakdown.append("Game over: -20.0")
+            blind_req = self.current_blind_chips if self.current_blind_chips else blind_chips
+            progress = min(1.0, self.highest_chips_this_blind / max(1, blind_req))
+            progress_credit = 8.0 * progress
+            reward -= 10.0
+            reward += progress_credit
+            reward_breakdown.append(f"Game over: -10.0 + progress_credit {progress:.1%}: +{progress_credit:.2f}")
             self.game_over_penalty_applied = True
             # Capture context for CLI output
             self.game_over_chips = self.highest_chips_this_blind
-            self.game_over_blind_chips = self.current_blind_chips if self.current_blind_chips else blind_chips
+            self.game_over_blind_chips = blind_req
             self.game_over_blind_name = self.current_blind_name if self.current_blind_name else blind_name
             self.game_over_ante = self.current_blind_ante if self.current_blind_ante else ante
 
