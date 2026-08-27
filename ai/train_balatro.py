@@ -120,7 +120,7 @@ def select_deck() -> str:
     for i, name in enumerate(DECK_NAMES):
         print(f"  [{i + 1}] {name}")
     while True:
-        choice = input("Select deck [1]: ").strip()
+        choice = input("Select deck (Default [1] Red Deck): ").strip()
         if choice == "":
             return DECK_NAMES[0]
         try:
@@ -145,6 +145,12 @@ def select_training_steps() -> int:
         except ValueError:
             pass
         print("  Enter a positive integer.")
+
+
+def select_debug_mode() -> bool:
+    """Prompt for debug mode (faster policy updates). Returns True if debug."""
+    choice = input("Debug mode — faster policy updates for testing? (y/N): ").strip().lower()
+    return choice == "y"
 
 
 def write_run_config(seed: str | None, deck: str) -> None:
@@ -248,13 +254,14 @@ def create_environment(seed=None, deck="Red Deck", is_endless=False, run_label: 
     return env
 
 
-def create_model(env, model_path=None):
+def create_model(env, model_path=None, n_steps=4096):
     """
     Create MaskablePPO model for training
 
     Args:
         env: Balatro environment
         model_path: Path to load existing model (optional)
+        n_steps: Steps per rollout before policy update (128 for debug, 4096 for training)
 
     Returns:
         MaskablePPO model ready for training
@@ -264,8 +271,7 @@ def create_model(env, model_path=None):
         env,
         verbose=0,
         learning_rate=3e-4,
-        #CHANGE BASED ON HOW MANY TRAINING STEPS
-        n_steps=4096,
+        n_steps=n_steps,
         batch_size=64,
         n_epochs=10,
         gamma=0.99,
@@ -275,6 +281,7 @@ def create_model(env, model_path=None):
 
     if model_path and Path(model_path).exists():
         model = MaskablePPO.load(model_path, env=env, tensorboard_log="./tensorboard_logs/")
+        model.n_steps = n_steps
         print(f"Loaded existing model from {model_path}")
 
     return model
@@ -295,7 +302,7 @@ def create_callbacks(save_freq=1000, checkpoint_dir="./models/"):
     return callbacks
 
 
-def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resume_from=None, checkpoint_dir="./models/", seed=None, deck="Red Deck", is_endless=False, run_label: str = ""):
+def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resume_from=None, checkpoint_dir="./models/", seed=None, deck="Red Deck", is_endless=False, run_label: str = "", n_steps: int = 4096):
     """
     Main training function
 
@@ -317,9 +324,10 @@ def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resu
         if resume_from and Path(resume_from).exists():
             logger.info(f"Resuming training from: {resume_from}")
             model = MaskablePPO.load(resume_from, env=env, tensorboard_log="./tensorboard_logs/")
+            model.n_steps = n_steps
         else:
             logger.info("Starting training from scratch")
-            model = create_model(env)
+            model = create_model(env, n_steps=n_steps)
 
         callbacks = create_callbacks(save_freq=max(1000, total_timesteps // 20), checkpoint_dir=checkpoint_dir)
 
@@ -330,7 +338,7 @@ def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resu
             total_timesteps=total_timesteps,
             callback=callbacks,
             progress_bar=True,
-            tb_log_name="Claude_new_tb_metrics",
+            tb_log_name="claude-rewards_restructure",
         )
 
         training_time = time.time() - start_time
@@ -426,6 +434,11 @@ if __name__ == "__main__":
     is_endless = (endless_raw == 'y')
     print(f"Endless mode: {'ON' if is_endless else 'OFF (stops at ante 8 boss)'}")
 
+    # --- Debug mode ---
+    debug_mode = select_debug_mode()
+    n_steps = 128 if debug_mode else 4096
+    print(f"Policy update every: {n_steps} steps{'  (debug)' if debug_mode else ''}")
+
     # Write config for the Lua mod auto-skip
     write_run_config(seed_choice, deck_choice)
 
@@ -452,7 +465,7 @@ if __name__ == "__main__":
         checkpoint_dir = None
 
         if has_runs:
-            resume_choice = input("Resume from a previous run? (y/N): ").strip().lower()
+            resume_choice = input("Resume from previous training? (y/N): ").strip().lower()
             if resume_choice == "y":
                 ckpt, run_dir = pick_run_to_resume(models_dir)
                 if ckpt:
@@ -465,7 +478,7 @@ if __name__ == "__main__":
         if checkpoint_dir is None:
             run_num = get_next_run_number(models_dir)
             run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-            checkpoint_dir = f"./models/run_{run_num}_{run_id}/"
+            checkpoint_dir = f"./models/session_{run_num}_{run_id}/"
             Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
             print(f"Starting fresh. Checkpoints → {checkpoint_dir}")
 
@@ -480,6 +493,7 @@ if __name__ == "__main__":
             deck=deck_choice,
             is_endless=is_endless,
             run_label=run_label,
+            n_steps=n_steps,
         )
 
         if model:
