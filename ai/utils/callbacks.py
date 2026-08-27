@@ -189,7 +189,7 @@ class BalatroMetricsCallback(BaseCallback):
             self._rollout_consumables_used.append(self.consumables_used_this_episode)
             ep_blind_total = self.episode_blind_attempts + self.episode_blind_skips
             self._rollout_blind_skip_rates.append(
-                (self.episode_blind_skips / max(1, ep_blind_total)) * 100)
+                (self.episode_blind_skips / max(1, ep_blind_total)))
 
             # --- Live TensorBoard (best-ever / all-time / rolling) ---
             hand_types = [
@@ -203,7 +203,7 @@ class BalatroMetricsCallback(BaseCallback):
             self.logger.record("game/win_rate_last_100",
                                round(100 * sum(self.recent_outcomes) / max(1, len(self.recent_outcomes)), 2))
             self.logger.record("game/blind_clear_rate_overall",
-                               round(self.total_blind_clears / max(1, self.total_blind_attempts) * 100, 2))
+                               round(self.total_blind_clears / max(1, self.total_blind_attempts), 2))
             self.logger.record("game/blind_clear_rate_last_100",
                                round(100 * sum(self.recent_blind_outcomes) / max(1, len(self.recent_blind_outcomes)), 2))
             self.logger.record("game/highest_chips_ever",    self.highest_chips)
@@ -214,7 +214,7 @@ class BalatroMetricsCallback(BaseCallback):
             self.logger.record("custom/total_blind_clears",  self.total_blind_clears)
             self.logger.record("custom/total_consumables_used", self.total_consumables_used)
             self.logger.record("actions/blind_skip_rate",
-                               round(self.total_blind_skips / max(1, self.total_blind_selections) * 100, 2))
+                               round(self.total_blind_skips / max(1, self.total_blind_selections), 2))
 
             # All-time hand type distribution (played types only)
             total_hands = sum(self.hand_type_counts.values()) or 1
@@ -277,7 +277,7 @@ class BalatroMetricsCallback(BaseCallback):
             self.logger.record("rollout/win_rate",
                                round(100.0 * self._rollout_wins / n, 2))
             self.logger.record("rollout/blind_clear_rate",
-                               round(self._rollout_blind_clears / max(1, self._rollout_blind_attempts) * 100, 2))
+                               round(self._rollout_blind_clears / max(1, self._rollout_blind_attempts), 2))
             self.logger.record("rollout/mean_ante",
                                self._mean(self._rollout_antes))
             self.logger.record("rollout/mean_money_earned",
