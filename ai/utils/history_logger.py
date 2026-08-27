@@ -1,6 +1,6 @@
 """
 History logger — writes a human-readable record of the bot's actions and their effects.
-One log file per training session, stored in action_history_logs/.
+One log file per training session, stored in game_history_logs/.
 Episode content is buffered in memory and flushed at episode end so the cleared-blinds
 TOC at the top of each episode block can reference accurate line numbers.
 """
@@ -35,7 +35,7 @@ def _card_str(card):
 
 
 class HistoryLogger:
-    def __init__(self, log_dir="action_history_logs", run_label: str = ""):
+    def __init__(self, log_dir="game_history_logs", run_label: str = ""):
         Path(log_dir).mkdir(exist_ok=True)
         if run_label:
             log_path = os.path.join(log_dir, f"history_{run_label}.log")
