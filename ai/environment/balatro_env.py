@@ -90,7 +90,7 @@ class BalatroEnv(gym.Env):
         ]))
 
         # Observation space
-        self.OBSERVATION_SIZE = 412
+        self.OBSERVATION_SIZE = 414
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
@@ -247,7 +247,8 @@ class BalatroEnv(gym.Env):
             reward = 0.0
             self.history_logger.log_episode_end(reward, self.reward_calculator.episode_reward_breakdown)
             return observation, reward, True, False, {"timeout": True}
-        self.logger.info(f"Received request, state: {next_request.get('game_state', {}).get('state', '?')}, actions: {next_request.get('available_actions', [])}")
+        _ngs = next_request.get('game_state', {})
+        self.logger.info(f"Received request, state: {_ngs.get('state', '?')}, round: {_ngs.get('round_count', 0)}, actions: {next_request.get('available_actions', [])}")
         
         #Check for Game Over
         game_state_early = next_request.get('game_state', {})

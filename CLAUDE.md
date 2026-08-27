@@ -196,14 +196,26 @@ MaskablePPO (from sb3-contrib) with MlpPolicy. Key hyperparameters:
 - `gamma`: 0.99, `ent_coef`: 0.01, `learning_rate`: 3e-4
 
 ### Observation Space
-Shape `(313,)` float32 vector built by `ai/utils/mappers.py`:
-- Round info: hands_left, discards_left (2)
-- Blind: blind_chips, current_chips (2)
-- Game state: one-hot (20) + game_over + game_win + retry_count (23)
-- Joker slots: occupancy flags × 5 (5)
-- Hand: size, highlighted_count + per-card features × 12 cards (254)
-- Scoring: chips, mult, score + hand type one-hot × 13 (16)
-- Available actions mask × 11 (11)
+Shape `(414,)` float32 vector built by `ai/utils/mappers.py` (`BalatroStateMapper`):
+
+| Slice | Features | Count |
+|-------|----------|-------|
+| Round | hands_left, discards_left | 2 |
+| Blind | blind_chips, current chips | 2 |
+| Progress | ante (norm /8), round_count (norm /24, = `G.GAME.round`, increments on blind selection), gold (norm /100), reroll_cost (norm /10) | 4 |
+| Game state | one-hot (20) + game_over + game_win + retry_count | 23 |
+| Blind identity | blind_name_id (norm /30), blind_is_boss | 2 |
+| Deck | deck name one-hot | 16 |
+| Jokers | 5 slots × 4 (occupied, name_id, sell_cost, edition) | 20 |
+| Consumables | 5 slots × 2 (occupied, name_id) | 10 |
+| Shop | 4 joker + 1 voucher + 2 booster slots × 3 each | 21 |
+| Pack cards | 5 slots × 2 (occupied, name_id) | 10 |
+| Deck stats | size + 4 seals + 8 enhancements + 4 editions | 17 |
+| Hand | size, highlighted_count + 12 cards × 21 features | 254 |
+| Scoring | chips, mult, score + hand type one-hot × 13 | 16 |
+| Action mask | 17 actions | 17 |
+
+**Note:** `blind_name` is encoded as a vocabulary index (`BLIND_NAMES` list in `mappers.py`). `blind_is_boss` is a binary flag from `G.GAME.blind.boss`. `round_count` maps `G.GAME.round` (not a career stat — it's a per-run counter reset on new run).
 
 ### Reward System (`ai/environment/reward.py`)
 Two components:
@@ -227,3 +239,4 @@ Reward clipped to [−25, +500].
 - Try to break things down in first principles effectively
 - Do not add explanatory comments about why values changed (e.g., "# Changed from X to Y because...") - just use the correct values
 - Comments should explain what something does, not why it was modified
+- When in plan mode, do not edit files. just write a plan

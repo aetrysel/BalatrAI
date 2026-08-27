@@ -114,7 +114,8 @@ function COMM.request_action(game_state, available_actions)
     }
 
     utils.log_comm(utils.get_timestamp() .. " Sending action request for state: " ..
-        tostring(game_state.state) .. " (" .. utils.get_state_name(game_state.state) .. ")")
+        tostring(game_state.state) .. " (" .. utils.get_state_name(game_state.state) .. ")" ..
+        " | round: " .. tostring(game_state.round_count or 0))
 
     -- Encode request as JSON
     local json_data = json.encode(request)
