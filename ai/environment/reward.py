@@ -129,6 +129,19 @@ class BalatroRewardCalculator:
             reward += 3.0
             breakdown.append("entered_pack: +3.00")
 
+        prev_consumable_shop = [it for it in prev_shop_items if it.get('type') == 'consumable']
+        curr_consumable_shop = [it for it in curr_shop_items if it.get('type') == 'consumable']
+        if prev_state_id == 5 and prev_consumable_shop and len(curr_consumable_shop) < len(prev_consumable_shop) and money_spent > 0:
+            reward += 2.0
+            breakdown.append("buy_and_use_consumable: +2.00")
+
+        prev_owned_consumables = prev_game_state.get('consumables', [])
+        curr_owned_consumables = current_game_state.get('consumables', [])
+        if (prev_state_id == 5 and current_money > prev_money
+                and len(curr_owned_consumables) < len(prev_owned_consumables)):
+            reward -= 0.5
+            breakdown.append("sell_consumable: -0.50")
+
         scaled = float(np.tanh(reward / 5.0) * 5.0)
         if breakdown:
             self.episode_reward_breakdown.append(

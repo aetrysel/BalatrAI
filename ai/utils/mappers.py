@@ -394,6 +394,8 @@ class BalatroActionMapper:
             14: 15,  # SELECT_PACK_CARD
             15: 16,  # SKIP_BOOSTER
             16: 17,  # SKIP_BLIND
+            17: 18,  # BUY_AND_USE_CONSUMABLE
+            18: 19,  # SELL_CONSUMABLE
         }
 
         SHOP_STATE = 5
@@ -430,6 +432,10 @@ class BalatroActionMapper:
             return [rl_action[self.slices["joker_slot"]].tolist()[0] + 1]
         elif balatro_action_id == 13:  # BUY_BOOSTER
             return [rl_action[self.slices["shop_slot"]].tolist()[0] + 1]
+        elif balatro_action_id == 18:  # BUY_AND_USE_CONSUMABLE
+            return [rl_action[self.slices["shop_slot"]].tolist()[0] + 1]
+        elif balatro_action_id == 19:  # SELL_CONSUMABLE
+            return [rl_action[self.slices["consumable_slot"]].tolist()[0] + 1]
         return []
 
     def _extract_pack_params(self, rl_action: np.ndarray, balatro_action_id: int) -> List[int]:

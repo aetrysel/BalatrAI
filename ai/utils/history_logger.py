@@ -22,7 +22,8 @@ ACTION_NAMES = {
     7: "BUY_JOKER", 8: "SELL_JOKER", 9: "REROLL_SHOP",
     10: "SKIP_SHOP", 11: "CASH_OUT", 12: "BUY_VOUCHER",
     13: "BUY_BOOSTER", 14: "USE_CONSUMABLE",
-    15: "SELECT_PACK_CARD", 16: "SKIP_PACK",
+    15: "SELECT_PACK_CARD", 16: "SKIP_PACK", 17: "SKIP_BLIND",
+    18: "BUY_AND_USE_CONSUMABLE", 19: "SELL_CONSUMABLE",
 }
 
 SUIT_SYMBOLS = {"Spades": "♠", "Hearts": "♥", "Clubs": "♣", "Diamonds": "♦"}
@@ -135,6 +136,15 @@ class HistoryLogger:
                 boosters = [it for it in shop_items if it.get('type') == 'booster']
                 item = boosters[params[0] - 1] if params and 0 < params[0] <= len(boosters) else {}
                 self._money_log.append(f"  BUY_BOOSTER \"{item.get('name', '?')}\": {delta:+d} (${prev_gold} → ${next_gold})")
+            elif action_id == 18:  # BUY_AND_USE_CONSUMABLE
+                shop_items = prev_gs.get('shop', {}).get('items', [])
+                consumables = [it for it in shop_items if it.get('type') == 'consumable']
+                item = consumables[params[0] - 1] if params and 0 < params[0] <= len(consumables) else {}
+                self._money_log.append(f"  BUY_AND_USE \"{item.get('name', '?')}\": {delta:+d} (${prev_gold} → ${next_gold})")
+            elif action_id == 19:  # SELL_CONSUMABLE
+                consumables_list = prev_gs.get('consumables', [])
+                item = consumables_list[params[0] - 1] if params and 0 < params[0] <= len(consumables_list) else {}
+                self._money_log.append(f"  SELL_CONSUMABLE \"{item.get('name', '?')}\": {delta:+d} (${prev_gold} → ${next_gold})")
 
         # Blind clear detection — record after _ep_write so buf_pos reflects this line
         if next_gs.get('blind_cleared', 0) == 1:
@@ -227,6 +237,24 @@ class HistoryLogger:
 
         elif action_id == 16:  # SKIP_PACK
             return "SKIP_PACK"
+
+        elif action_id == 17:  # SKIP_BLIND
+            return "SKIP_BLIND"
+
+        elif action_id == 18:  # BUY_AND_USE_CONSUMABLE
+            shop_items = prev_gs.get('shop', {}).get('items', [])
+            consumables = [it for it in shop_items if it.get('type') == 'consumable']
+            item = consumables[slot - 1] if slot and 0 < slot <= len(consumables) else None
+            if item:
+                return f"BUY_AND_USE \"{item['name']}\" (${item.get('cost', '?')})"
+            return f"BUY_AND_USE_CONSUMABLE slot:{slot}"
+
+        elif action_id == 19:  # SELL_CONSUMABLE
+            consumables = prev_gs.get('consumables', [])
+            item = consumables[slot - 1] if slot and 0 < slot <= len(consumables) else None
+            if item:
+                return f"SELL_CONSUMABLE \"{item['name']}\" (+${item.get('sell_cost', '?')})"
+            return f"SELL_CONSUMABLE slot:{slot}"
 
         return ACTION_NAMES.get(action_id, f"ACTION_{action_id}")
 

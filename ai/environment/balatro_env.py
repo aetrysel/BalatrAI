@@ -62,7 +62,7 @@ class BalatroEnv(gym.Env):
         self._episode_count = 0
 
         # Action space constants
-        self.MAX_ACTIONS = 17        # actions 0-16 (balatro IDs 1-17)
+        self.MAX_ACTIONS = 19        # actions 0-18 (balatro IDs 1-19)
         self.MAX_CARDS = 8           # binary card selectors
         self.MAX_SHOP_SLOTS = 5      # shared by BUY_JOKER and BUY_BOOSTER
         self.MAX_JOKER_SLOTS = 5     # for SELL_JOKER
@@ -90,7 +90,7 @@ class BalatroEnv(gym.Env):
         ]))
 
         # Observation space
-        self.OBSERVATION_SIZE = 414
+        self.OBSERVATION_SIZE = 412
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
@@ -99,7 +99,8 @@ class BalatroEnv(gym.Env):
         )
 
         # Initialize mappers
-        self.state_mapper = BalatroStateMapper(observation_size=self.OBSERVATION_SIZE, max_actions=self.MAX_ACTIONS)
+        # max_actions=17 keeps observation vector at 412 dims (17-bit action mask)
+        self.state_mapper = BalatroStateMapper(observation_size=self.OBSERVATION_SIZE, max_actions=17)
         self.action_mapper = BalatroActionMapper(action_slices=slices)
     
     def reset(self, seed=None, options=None):
@@ -377,7 +378,7 @@ class BalatroEnv(gym.Env):
             1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5,
             7: 6, 8: 7, 9: 8, 10: 9, 11: 10,
             12: 11, 13: 12, 14: 13, 15: 14, 16: 15,
-            17: 16,
+            17: 16, 18: 17, 19: 18,
         }
 
         action_selection_mask = [False] * self.MAX_ACTIONS
@@ -420,14 +421,21 @@ class BalatroEnv(gym.Env):
 
             shop_items = inner_state.get('shop', {}).get('items', [])
             joker_items = [it for it in shop_items if it.get('type') == 'joker']
+            consumable_shop_items = [it for it in shop_items if it.get('type') == 'consumable']
             booster_items = [it for it in shop_items if it.get('type') == 'booster']
 
+            # shop_slot indexes into G.shop_jokers (BUY_JOKER, BUY_AND_USE_CONSUMABLE)
+            # or G.shop_booster (BUY_BOOSTER). Use the item's slot field for correct mapping.
             shop_mask = [False] * self.MAX_SHOP_SLOTS
-            # BUY_JOKER uses shop_slot for joker area slots
-            for i, item in enumerate(joker_items):
-                if i < self.MAX_SHOP_SLOTS and item.get('cost', 999) <= money:
-                    shop_mask[i] = True
-            # BUY_BOOSTER reuses shop_slot for booster area slots
+            for item in joker_items:
+                item_slot = item.get('slot', 0) - 1  # convert 1-based to 0-based
+                if 0 <= item_slot < self.MAX_SHOP_SLOTS and item.get('cost', 999) <= money:
+                    shop_mask[item_slot] = True
+            for item in consumable_shop_items:
+                item_slot = item.get('slot', 0) - 1
+                if 0 <= item_slot < self.MAX_SHOP_SLOTS and item.get('cost', 999) <= money:
+                    shop_mask[item_slot] = True
+            # BUY_BOOSTER uses G.shop_booster which is a separate area (sequential slots)
             for i, item in enumerate(booster_items):
                 if i < self.MAX_SHOP_SLOTS and item.get('cost', 999) <= money:
                     shop_mask[i] = True
@@ -439,7 +447,13 @@ class BalatroEnv(gym.Env):
                 joker_mask[i] = True
             action_masks.append(joker_mask)
 
-            action_masks.append([False] * self.MAX_CONSUMABLE_SLOTS)
+            # SELL_CONSUMABLE uses consumable_slot
+            owned_consumables = inner_state.get('consumables', [])
+            consumable_mask = [False] * self.MAX_CONSUMABLE_SLOTS
+            if 19 in available_actions:  # SELL_CONSUMABLE
+                for i in range(min(len(owned_consumables), self.MAX_CONSUMABLE_SLOTS)):
+                    consumable_mask[i] = True
+            action_masks.append(consumable_mask)
             action_masks.append([False] * self.MAX_PACK_SLOTS)
 
         elif state_id == 7:  # BLIND_SELECT
