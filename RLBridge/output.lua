@@ -204,10 +204,11 @@ function O.get_shop_items()
 
     if G.shop_jokers and G.shop_jokers.cards then
         for i, card in ipairs(G.shop_jokers.cards) do
+            local is_consumable = card.ability and card.ability.consumeable
             table.insert(items, {
                 name = card.config.center.name or "Unknown",
                 cost = card.cost or 999,
-                type = "joker",
+                type = is_consumable and "consumable" or "joker",
                 item_set = card.config.center.set or "Joker",
                 slot = i
             })

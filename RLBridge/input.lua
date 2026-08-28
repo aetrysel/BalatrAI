@@ -228,7 +228,13 @@ function I.buy_voucher()
     if G.GAME.dollars < (card.cost or 10) then
         return { success = false, error = "Cannot afford voucher, cost: " .. tostring(card.cost) }
     end
-    G.FUNCS.buy_from_shop({ config = { ref_table = card } })
+    local ok, err = pcall(function()
+        G.FUNCS.use_card({ config = { ref_table = card } })
+    end)
+    if not ok then
+        utils.log_input("buy_voucher ERROR: " .. tostring(err))
+        return { success = false, error = tostring(err) }
+    end
     utils.log_input("buy_voucher " .. utils.completed_success_msg)
     return { success = true }
 end
@@ -251,8 +257,66 @@ function I.buy_booster(slot)
     if G.GAME.dollars < (card.cost or 4) then
         return { success = false, error = "Cannot afford booster, cost: " .. tostring(card.cost) }
     end
-    G.FUNCS.buy_from_shop({ config = { ref_table = card } })
+    local ok, err = pcall(function()
+        G.FUNCS.use_card({ config = { ref_table = card } })
+    end)
+    if not ok then
+        utils.log_input("buy_booster ERROR: " .. tostring(err))
+        return { success = false, error = tostring(err) }
+    end
     utils.log_input("buy_booster slot " .. tostring(slot) .. " " .. utils.completed_success_msg)
+    return { success = true }
+end
+
+--- Buy and immediately use a consumable (tarot/planet) from G.shop_jokers by slot index
+function I.buy_and_use_shop_item(slot)
+    if not slot or type(slot) ~= "number" then
+        return { success = false, error = "Invalid slot parameter" }
+    end
+    if not G.shop_jokers or not G.shop_jokers.cards then
+        return { success = false, error = "Shop joker area not available" }
+    end
+    if slot < 1 or slot > #G.shop_jokers.cards then
+        return { success = false, error = "Slot index out of bounds: " .. tostring(slot) }
+    end
+    local card = G.shop_jokers.cards[slot]
+    if not card then
+        return { success = false, error = "No card in slot: " .. tostring(slot) }
+    end
+    if not (card.ability and card.ability.consumeable) then
+        return { success = false, error = "Not a consumable in slot: " .. tostring(slot) }
+    end
+    if G.GAME.dollars < (card.cost or 3) then
+        return { success = false, error = "Cannot afford, cost: " .. tostring(card.cost) }
+    end
+    local ok, err = pcall(function()
+        G.FUNCS.buy_from_shop({ config = { ref_table = card, id = 'buy_and_use' } })
+    end)
+    if not ok then
+        utils.log_input("buy_and_use_shop_item ERROR: " .. tostring(err))
+        return { success = false, error = tostring(err) }
+    end
+    utils.log_input("buy_and_use_shop_item slot " .. tostring(slot) .. " " .. utils.completed_success_msg)
+    return { success = true }
+end
+
+--- Sell a consumable from G.consumeables by slot index
+function I.sell_consumable(slot)
+    if not slot or type(slot) ~= "number" then
+        return { success = false, error = "Invalid slot parameter" }
+    end
+    if not G.consumeables or not G.consumeables.cards or #G.consumeables.cards == 0 then
+        return { success = false, error = "No consumables available" }
+    end
+    if slot < 1 or slot > #G.consumeables.cards then
+        return { success = false, error = "Consumable slot out of bounds: " .. tostring(slot) }
+    end
+    local card = G.consumeables.cards[slot]
+    if not card then
+        return { success = false, error = "No consumable in slot: " .. tostring(slot) }
+    end
+    card:sell_card()
+    utils.log_input("sell_consumable slot " .. tostring(slot) .. " " .. utils.completed_success_msg)
     return { success = true }
 end
 

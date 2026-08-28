@@ -478,7 +478,7 @@ if __name__ == "__main__":
         if checkpoint_dir is None:
             run_num = get_next_run_number(models_dir)
             run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-            checkpoint_dir = f"./models/session_{run_num}_{run_id}/"
+            checkpoint_dir = f"./models/run_{run_num}_{run_id}/"
             Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
             print(f"Starting fresh. Checkpoints → {checkpoint_dir}")
 

@@ -21,51 +21,57 @@ ACTIONS.SKIP_SHOP        = 10
 ACTIONS.CASH_OUT         = 11
 
 -- Extended actions
-ACTIONS.BUY_VOUCHER      = 12
-ACTIONS.BUY_BOOSTER      = 13
-ACTIONS.USE_CONSUMABLE   = 14
-ACTIONS.SELECT_PACK_CARD = 15
-ACTIONS.SKIP_BOOSTER     = 16
-ACTIONS.SKIP_BLIND       = 17
+ACTIONS.BUY_VOUCHER            = 12
+ACTIONS.BUY_BOOSTER            = 13
+ACTIONS.USE_CONSUMABLE         = 14
+ACTIONS.SELECT_PACK_CARD       = 15
+ACTIONS.SKIP_BOOSTER           = 16
+ACTIONS.SKIP_BLIND             = 17
+ACTIONS.BUY_AND_USE_CONSUMABLE = 18
+ACTIONS.SELL_CONSUMABLE        = 19
 
 local ACTION_IDS = {
-    select_hand      = ACTIONS.SELECT_HAND,
-    play_hand        = ACTIONS.PLAY_HAND,
-    discard_hand     = ACTIONS.DISCARD_HAND,
-    start_run        = ACTIONS.START_RUN,
-    select_blind     = ACTIONS.SELECT_BLIND,
-    restart_run      = ACTIONS.RESTART_RUN,
-    buy_joker        = ACTIONS.BUY_JOKER,
-    sell_joker       = ACTIONS.SELL_JOKER,
-    reroll_shop      = ACTIONS.REROLL_SHOP,
-    skip_shop        = ACTIONS.SKIP_SHOP,
-    cash_out         = ACTIONS.CASH_OUT,
-    buy_voucher      = ACTIONS.BUY_VOUCHER,
-    buy_booster      = ACTIONS.BUY_BOOSTER,
-    use_consumable   = ACTIONS.USE_CONSUMABLE,
-    select_pack_card = ACTIONS.SELECT_PACK_CARD,
-    skip_booster     = ACTIONS.SKIP_BOOSTER,
-    skip_blind       = ACTIONS.SKIP_BLIND,
+    select_hand            = ACTIONS.SELECT_HAND,
+    play_hand              = ACTIONS.PLAY_HAND,
+    discard_hand           = ACTIONS.DISCARD_HAND,
+    start_run              = ACTIONS.START_RUN,
+    select_blind           = ACTIONS.SELECT_BLIND,
+    restart_run            = ACTIONS.RESTART_RUN,
+    buy_joker              = ACTIONS.BUY_JOKER,
+    sell_joker             = ACTIONS.SELL_JOKER,
+    reroll_shop            = ACTIONS.REROLL_SHOP,
+    skip_shop              = ACTIONS.SKIP_SHOP,
+    cash_out               = ACTIONS.CASH_OUT,
+    buy_voucher            = ACTIONS.BUY_VOUCHER,
+    buy_booster            = ACTIONS.BUY_BOOSTER,
+    use_consumable         = ACTIONS.USE_CONSUMABLE,
+    select_pack_card       = ACTIONS.SELECT_PACK_CARD,
+    skip_booster           = ACTIONS.SKIP_BOOSTER,
+    skip_blind             = ACTIONS.SKIP_BLIND,
+    buy_and_use_consumable = ACTIONS.BUY_AND_USE_CONSUMABLE,
+    sell_consumable        = ACTIONS.SELL_CONSUMABLE,
 }
 
 local ID_TO_ACTION = {
-    [ACTIONS.SELECT_HAND]      = "select_hand",
-    [ACTIONS.PLAY_HAND]        = "play_hand",
-    [ACTIONS.DISCARD_HAND]     = "discard_hand",
-    [ACTIONS.START_RUN]        = "start_run",
-    [ACTIONS.SELECT_BLIND]     = "select_blind",
-    [ACTIONS.RESTART_RUN]      = "restart_run",
-    [ACTIONS.BUY_JOKER]        = "buy_joker",
-    [ACTIONS.SELL_JOKER]       = "sell_joker",
-    [ACTIONS.REROLL_SHOP]      = "reroll_shop",
-    [ACTIONS.SKIP_SHOP]        = "skip_shop",
-    [ACTIONS.CASH_OUT]         = "cash_out",
-    [ACTIONS.BUY_VOUCHER]      = "buy_voucher",
-    [ACTIONS.BUY_BOOSTER]      = "buy_booster",
-    [ACTIONS.USE_CONSUMABLE]   = "use_consumable",
-    [ACTIONS.SELECT_PACK_CARD] = "select_pack_card",
-    [ACTIONS.SKIP_BOOSTER]     = "skip_booster",
-    [ACTIONS.SKIP_BLIND]       = "skip_blind",
+    [ACTIONS.SELECT_HAND]            = "select_hand",
+    [ACTIONS.PLAY_HAND]              = "play_hand",
+    [ACTIONS.DISCARD_HAND]           = "discard_hand",
+    [ACTIONS.START_RUN]              = "start_run",
+    [ACTIONS.SELECT_BLIND]           = "select_blind",
+    [ACTIONS.RESTART_RUN]            = "restart_run",
+    [ACTIONS.BUY_JOKER]              = "buy_joker",
+    [ACTIONS.SELL_JOKER]             = "sell_joker",
+    [ACTIONS.REROLL_SHOP]            = "reroll_shop",
+    [ACTIONS.SKIP_SHOP]              = "skip_shop",
+    [ACTIONS.CASH_OUT]               = "cash_out",
+    [ACTIONS.BUY_VOUCHER]            = "buy_voucher",
+    [ACTIONS.BUY_BOOSTER]            = "buy_booster",
+    [ACTIONS.USE_CONSUMABLE]         = "use_consumable",
+    [ACTIONS.SELECT_PACK_CARD]       = "select_pack_card",
+    [ACTIONS.SKIP_BOOSTER]           = "skip_booster",
+    [ACTIONS.SKIP_BLIND]             = "skip_blind",
+    [ACTIONS.BUY_AND_USE_CONSUMABLE] = "buy_and_use_consumable",
+    [ACTIONS.SELL_CONSUMABLE]        = "sell_consumable",
 }
 
 local function is_pack_state()
@@ -164,7 +170,7 @@ local action_registry = {
             return (G.STATE == G.STATES.GAME_OVER) and not action_state.restart_run
         end,
     },
-    -- Buys any item from G.shop_jokers by slot (jokers, tarots, planets that appear there)
+    -- Buys any joker from G.shop_jokers by slot
     buy_joker = {
         execute = function(params)
             local slot = params and params[1] or 1
@@ -176,6 +182,7 @@ local action_registry = {
                 and G.shop_jokers.cards
                 and #G.shop_jokers.cards > 0
                 and utils.is_game_ready_for_action()
+                and not action_state.buy_joker
         end,
     },
     sell_joker = {
@@ -187,6 +194,8 @@ local action_registry = {
             return G.STATE == G.STATES.SHOP
                 and G.jokers and #G.jokers.cards > 0
                 and utils.is_game_ready_for_action()
+                and not action_state.sell_joker
+                and not action_state.buy_joker
         end,
     },
     reroll_shop = {
@@ -197,6 +206,7 @@ local action_registry = {
             return G.STATE == G.STATES.SHOP
                 and G.GAME.dollars >= G.GAME.current_round.reroll_cost
                 and utils.is_game_ready_for_action()
+                and not action_state.reroll_shop
         end,
     },
     skip_shop = {
@@ -224,6 +234,8 @@ local action_registry = {
         available_when = function()
             if G.STATE ~= G.STATES.SHOP then return false end
             if not G.shop_vouchers or not G.shop_vouchers.cards or #G.shop_vouchers.cards == 0 then return false end
+            if not utils.is_game_ready_for_action() then return false end
+            if action_state.buy_voucher then return false end
             local card = G.shop_vouchers.cards[1]
             return card and G.GAME.dollars >= (card.cost or 10)
         end,
@@ -235,7 +247,44 @@ local action_registry = {
         end,
         available_when = function()
             if G.STATE ~= G.STATES.SHOP then return false end
-            return G.shop_booster and G.shop_booster.cards and #G.shop_booster.cards > 0
+            if not G.shop_booster or not G.shop_booster.cards or #G.shop_booster.cards == 0 then return false end
+            if not utils.is_game_ready_for_action() then return false end
+            if action_state.buy_booster then return false end
+            for _, card in ipairs(G.shop_booster.cards) do
+                if G.GAME.dollars >= (card.cost or 4) then return true end
+            end
+            return false
+        end,
+    },
+    buy_and_use_consumable = {
+        execute = function(params)
+            local slot = params and params[1] or 1
+            return input.buy_and_use_shop_item(slot)
+        end,
+        available_when = function()
+            if G.STATE ~= G.STATES.SHOP then return false end
+            if not G.shop_jokers or not G.shop_jokers.cards then return false end
+            if not utils.is_game_ready_for_action() then return false end
+            if action_state.buy_and_use_consumable then return false end
+            for _, card in ipairs(G.shop_jokers.cards) do
+                if card.ability and card.ability.consumeable and G.GAME.dollars >= (card.cost or 3) then
+                    return true
+                end
+            end
+            return false
+        end,
+    },
+    sell_consumable = {
+        execute = function(params)
+            local slot = params and params[1] or 1
+            return input.sell_consumable(slot)
+        end,
+        available_when = function()
+            return G.STATE == G.STATES.SHOP
+                and G.consumeables and G.consumeables.cards and #G.consumeables.cards > 0
+                and utils.is_game_ready_for_action()
+                and not action_state.sell_consumable
+                and not action_state.buy_and_use_consumable
         end,
     },
     use_consumable = {
