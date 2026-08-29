@@ -90,7 +90,7 @@ class BalatroEnv(gym.Env):
         ]))
 
         # Observation space
-        self.OBSERVATION_SIZE = 414
+        self.OBSERVATION_SIZE = 412
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
@@ -400,9 +400,10 @@ class BalatroEnv(gym.Env):
             action_masks.append([False] * self.MAX_PACK_SLOTS)
 
         elif state_id in self.PACK_STATE_IDS:
-            # PACK states: card selection not relevant
+            # Tarot/spectral packs let the agent highlight hand cards as consumable targets
+            can_select_hand = state_id in {9, 15}  # TAROT_PACK=9, SPECTRAL_PACK=15
             for _ in range(self.MAX_CARDS):
-                action_masks.append([True, False])
+                action_masks.append([True, True] if can_select_hand else [True, False])
             action_masks.append([False] * self.MAX_SHOP_SLOTS)
             action_masks.append([False] * self.MAX_JOKER_SLOTS)
             action_masks.append([False] * self.MAX_CONSUMABLE_SLOTS)

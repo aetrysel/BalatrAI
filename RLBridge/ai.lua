@@ -65,8 +65,9 @@ function AI.update()
         end
         return
     end
-    if G.CONTROLLER.locking_buttons or G.CONTROLLER.interrupt_inputs or G.CONTROLLER.locks[1] then
-        return 
+    -- Allow pack states through even if controller is locked (card deal animations set locking_buttons)
+    if not is_pack_state(G.STATE) and (G.CONTROLLER.locking_buttons or G.CONTROLLER.interrupt_inputs or G.CONTROLLER.locks[1]) then
+        return
     end
     if last_key_pressed then
         if last_key_pressed == "r" then

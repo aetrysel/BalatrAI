@@ -129,9 +129,13 @@ local action_registry = {
             return input.select_hand(params, boss_name)
         end,
         available_when = function()
-            return G.STATE == G.STATES.SELECTING_HAND and G.hand and G.hand.cards and #G.hand.highlighted <= 0 and
-                utils.is_game_ready_for_action() and
-                not action_state.select_hand
+            -- In tarot/spectral packs the agent targets hand cards; no highlight-empty check so it can re-target
+            local in_tarot_spectral = G.STATE == G.STATES.TAROT_PACK or G.STATE == G.STATES.SPECTRAL_PACK
+            if in_tarot_spectral then
+                return G.hand and G.hand.cards and utils.is_game_ready_for_action() and not action_state.select_hand
+            end
+            return G.STATE == G.STATES.SELECTING_HAND and G.hand and G.hand.cards and #G.hand.highlighted <= 0
+                and utils.is_game_ready_for_action() and not action_state.select_hand
         end,
     },
     play_hand = {
