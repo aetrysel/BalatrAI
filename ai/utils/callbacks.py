@@ -15,6 +15,8 @@ class BalatroMetricsCallback(BaseCallback):
         self.total_blind_selections = 0  # attempts + skips (for overall skip rate)
         self.total_blind_skips = 0
         self.total_consumables_used = 0
+        self.total_boss_blind_clears = 0
+        self.total_boss_blind_encounters = 0  # clears + losses on boss blinds
 
         # Best-ever metrics
         self.best_ante = 0
@@ -32,6 +34,9 @@ class BalatroMetricsCallback(BaseCallback):
 
         # Rolling last-100 blind outcomes (1=cleared, 0=failed)
         self.recent_blind_outcomes = deque(maxlen=100)
+
+        # Rolling last-100 boss blind outcomes (1=cleared, 0=failed)
+        self.recent_boss_blind_outcomes = deque(maxlen=100)
 
         # --- Per-episode accumulators (reset at episode end) ---
         self.current_run_length = 0
@@ -149,6 +154,10 @@ class BalatroMetricsCallback(BaseCallback):
                     self.highest_chips = clear_chips
                 self._rollout_chips.append(clear_chips)
                 self.recent_blind_outcomes.append(1)
+                if info.get("blind_is_boss", False):
+                    self.total_boss_blind_clears += 1
+                    self.total_boss_blind_encounters += 1
+                    self.recent_boss_blind_outcomes.append(1)
 
             if not done:
                 continue
@@ -169,6 +178,9 @@ class BalatroMetricsCallback(BaseCallback):
             # Failed blind outcome (timeout is not a blind failure)
             if not won and not info.get("timeout", False):
                 self.recent_blind_outcomes.append(0)
+                if info.get("blind_is_boss", False):
+                    self.total_boss_blind_encounters += 1
+                    self.recent_boss_blind_outcomes.append(0)
 
             if ante > self.best_ante or (ante == self.best_ante and round_ > self.best_round):
                 self.best_ante = ante
@@ -201,18 +213,23 @@ class BalatroMetricsCallback(BaseCallback):
             self.logger.record("game/win_rate_overall",
                                self._win_pct())
             self.logger.record("game/win_rate_last_100",
-                               round(100 * sum(self.recent_outcomes) / max(1, len(self.recent_outcomes)), 2))
+                               round(sum(self.recent_outcomes) / max(1, len(self.recent_outcomes)), 2))
             self.logger.record("game/blind_clear_rate_overall",
                                round(self.total_blind_clears / max(1, self.total_blind_attempts), 2))
             self.logger.record("game/blind_clear_rate_last_100",
-                               round(100 * sum(self.recent_blind_outcomes) / max(1, len(self.recent_blind_outcomes)), 2))
+                               round(sum(self.recent_blind_outcomes) / max(1, len(self.recent_blind_outcomes)), 2))
             self.logger.record("game/highest_chips_ever",    self.highest_chips)
             self.logger.record("game/best_ante",             self.best_ante)
             self.logger.record("game/best_round",            self.best_round)
             self.logger.record("money/max_ever_held",        self.max_money_ever)
             self.logger.record("custom/total_wins",          self.total_wins)
             self.logger.record("custom/total_blind_clears",  self.total_blind_clears)
+            self.logger.record("custom/total_boss_blind_clears", self.total_boss_blind_clears)
             self.logger.record("custom/total_consumables_used", self.total_consumables_used)
+            self.logger.record("game/boss_blind_clear_rate_overall",
+                               round(self.total_boss_blind_clears / max(1, self.total_boss_blind_encounters), 2))
+            self.logger.record("game/boss_blind_clear_rate_last_100",
+                               round(sum(self.recent_boss_blind_outcomes) / max(1, len(self.recent_boss_blind_outcomes)), 2))
             self.logger.record("actions/blind_skip_rate",
                                round(self.total_blind_skips / max(1, self.total_blind_selections), 2))
 
