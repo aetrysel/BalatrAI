@@ -84,9 +84,17 @@ local function is_pack_state()
 end
 
 local action_state = {}
+-- Persists across action_state resets until state leaves pack entirely.
+-- Balatro resets pack_choices during async cleanup after skip_booster fires, which
+-- temporarily makes select_pack_card appear valid again. This flag blocks both
+-- actions for the remainder of the pack state after skip_booster is executed.
+local skip_booster_executed = false
 
 function ACTIONS.reset_state()
     action_state = {}
+    if not is_pack_state() then
+        skip_booster_executed = false
+    end
 end
 
 function ACTIONS.mark_executed(action_name)
@@ -320,26 +328,31 @@ local action_registry = {
         end,
         available_when = function()
             return is_pack_state()
+                and not skip_booster_executed
                 and G.pack_cards and G.pack_cards.cards and #G.pack_cards.cards > 0
                 and (G.GAME.pack_choices or 0) > 0
+                and utils.is_game_ready_for_action()
                 and not action_state.select_pack_card
         end,
     },
     skip_booster = {
         execute = function(params)
+            skip_booster_executed = true
             return input.skip_booster()
         end,
         available_when = function()
             if not is_pack_state() then return false end
-            -- In SMODS state 999, G.pack_cards isn't populated until ~1.3s after entry.
-            -- Wait for cards to load before allowing any pack interaction.
+            if skip_booster_executed then return false end
+            -- In SMODS state 999, wait for pack cards to load before allowing any actions.
             if G.STATES.SMODS_BOOSTER_OPENED and G.STATE == G.STATES.SMODS_BOOSTER_OPENED then
                 if not (G.pack_cards and G.pack_cards.cards and #G.pack_cards.cards > 0) then
                     return false
                 end
             end
             -- Only available when choices remain; pack auto-closes when pack_choices reaches 0.
-            return (G.GAME.pack_choices or 0) > 0 and not action_state.skip_booster
+            return (G.GAME.pack_choices or 0) > 0
+                and utils.is_game_ready_for_action()
+                and not action_state.skip_booster
         end,
     },
 }
