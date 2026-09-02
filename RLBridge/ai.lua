@@ -29,6 +29,7 @@ local function is_pack_state(state)
         or state == G.STATES.SPECTRAL_PACK
         or state == G.STATES.STANDARD_PACK
         or state == G.STATES.BUFFOON_PACK
+        or (G.STATES.SMODS_BOOSTER_OPENED ~= nil and state == G.STATES.SMODS_BOOSTER_OPENED)
 end
 
 --- Initialize AI system

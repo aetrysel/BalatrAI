@@ -364,7 +364,7 @@ class BalatroEnv(gym.Env):
         # Safe fallback: allow all actions
         return np.ones(sum(self.action_space.nvec), dtype=bool)
     
-    PACK_STATE_IDS = {9, 10, 15, 17, 18}
+    PACK_STATE_IDS = {9, 10, 15, 17, 18, 999}  # 999 = SMODS_BOOSTER_OPENED (Steamodded)
 
     def _create_action_mask(self, available_actions, current_game_state):
         """Create action mask for MultiDiscrete space."""
@@ -401,7 +401,10 @@ class BalatroEnv(gym.Env):
 
         elif state_id in self.PACK_STATE_IDS:
             # Tarot/spectral packs let the agent highlight hand cards as consumable targets
-            can_select_hand = state_id in {9, 15}  # TAROT_PACK=9, SPECTRAL_PACK=15
+            can_select_hand = state_id in {9, 15}  # TAROT_PACK=9, SPECTRAL_PACK=15 (vanilla)
+            if state_id == 999:  # SMODS_BOOSTER_OPENED: detect type from pack card set
+                pack_cards = inner_state.get('pack_cards', [])
+                can_select_hand = bool(pack_cards) and pack_cards[0].get('item_set') in {'Tarot', 'Spectral'}
             for _ in range(self.MAX_CARDS):
                 action_masks.append([True, True] if can_select_hand else [True, False])
             action_masks.append([False] * self.MAX_SHOP_SLOTS)

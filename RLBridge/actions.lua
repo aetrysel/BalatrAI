@@ -80,6 +80,7 @@ local function is_pack_state()
         or G.STATE == G.STATES.SPECTRAL_PACK
         or G.STATE == G.STATES.STANDARD_PACK
         or G.STATE == G.STATES.BUFFOON_PACK
+        or (G.STATES.SMODS_BOOSTER_OPENED ~= nil and G.STATE == G.STATES.SMODS_BOOSTER_OPENED)
 end
 
 local action_state = {}
@@ -131,6 +132,15 @@ local action_registry = {
         available_when = function()
             -- In tarot/spectral packs the agent targets hand cards; no highlight-empty check so it can re-target
             local in_tarot_spectral = G.STATE == G.STATES.TAROT_PACK or G.STATE == G.STATES.SPECTRAL_PACK
+            -- SMODS_BOOSTER_OPENED (999) consolidates all pack types; detect tarot/spectral by card set
+            if not in_tarot_spectral and G.STATES.SMODS_BOOSTER_OPENED and G.STATE == G.STATES.SMODS_BOOSTER_OPENED then
+                if G.pack_cards and G.pack_cards.cards and #G.pack_cards.cards > 0 then
+                    local set = G.pack_cards.cards[1].config
+                        and G.pack_cards.cards[1].config.center
+                        and G.pack_cards.cards[1].config.center.set
+                    in_tarot_spectral = set == 'Tarot' or set == 'Spectral'
+                end
+            end
             if in_tarot_spectral then
                 return G.hand and G.hand.cards and utils.is_game_ready_for_action() and not action_state.select_hand
             end
