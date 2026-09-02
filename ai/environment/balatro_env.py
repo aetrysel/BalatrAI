@@ -377,7 +377,7 @@ class BalatroEnv(gym.Env):
             1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5,
             7: 6, 8: 7, 9: 8, 10: 9, 11: 10,
             12: 11, 13: 12, 14: 13, 15: 14, 16: 15,
-            17: 16,
+            17: 16, 18: 17, 19: 18,
         }
 
         action_selection_mask = [False] * self.MAX_ACTIONS
@@ -425,6 +425,7 @@ class BalatroEnv(gym.Env):
             shop_items = inner_state.get('shop', {}).get('items', [])
             joker_items = [it for it in shop_items if it.get('type') == 'joker']
             booster_items = [it for it in shop_items if it.get('type') == 'booster']
+            consumable_shop_items = [it for it in shop_items if it.get('type') == 'consumable']
 
             shop_mask = [False] * self.MAX_SHOP_SLOTS
             # BUY_JOKER uses shop_slot for joker area slots
@@ -435,6 +436,10 @@ class BalatroEnv(gym.Env):
             for i, item in enumerate(booster_items):
                 if i < self.MAX_SHOP_SLOTS and item.get('cost', 999) <= money:
                     shop_mask[i] = True
+            # BUY_AND_USE_CONSUMABLE reuses shop_slot for consumable items in shop_jokers
+            for i, item in enumerate(consumable_shop_items):
+                if i < self.MAX_SHOP_SLOTS and item.get('cost', 999) <= money:
+                    shop_mask[i] = True
             action_masks.append(shop_mask)
 
             owned_jokers = inner_state.get('jokers', [])
@@ -443,7 +448,13 @@ class BalatroEnv(gym.Env):
                 joker_mask[i] = True
             action_masks.append(joker_mask)
 
-            action_masks.append([False] * self.MAX_CONSUMABLE_SLOTS)
+            # SELL_CONSUMABLE uses consumable_slot; enable slots with owned consumables
+            owned_consumables = inner_state.get('consumables', [])
+            consumable_mask = [False] * self.MAX_CONSUMABLE_SLOTS
+            if 19 in available_actions:
+                for i in range(min(len(owned_consumables), self.MAX_CONSUMABLE_SLOTS)):
+                    consumable_mask[i] = True
+            action_masks.append(consumable_mask)
             action_masks.append([False] * self.MAX_PACK_SLOTS)
 
         elif state_id == 7:  # BLIND_SELECT
