@@ -417,7 +417,7 @@ class BalatroActionMapper:
         return response_data
 
     def _extract_play_params(self, raw_action: np.ndarray, balatro_action_id: int) -> List[int]:
-        if balatro_action_id == 14:  # USE_CONSUMABLE
+        if balatro_action_id in (14, 19):  # USE_CONSUMABLE, SELL_CONSUMABLE
             consumable_slot = raw_action[self.slices["consumable_slot"]].tolist()[0]
             return [consumable_slot + 1]
         card_indices = raw_action[self.slices["card_indices"]]
@@ -432,11 +432,13 @@ class BalatroActionMapper:
             return [rl_action[self.slices["shop_slot"]].tolist()[0] + 1]
         elif balatro_action_id == 18:  # BUY_AND_USE_CONSUMABLE
             return [rl_action[self.slices["shop_slot"]].tolist()[0] + 1]
-        elif balatro_action_id == 19:  # SELL_CONSUMABLE
+        elif balatro_action_id in (14, 19):  # USE_CONSUMABLE, SELL_CONSUMABLE
             return [rl_action[self.slices["consumable_slot"]].tolist()[0] + 1]
         return []
 
     def _extract_pack_params(self, rl_action: np.ndarray, balatro_action_id: int) -> List[int]:
         if balatro_action_id == 15:  # SELECT_PACK_CARD
             return [rl_action[self.slices["pack_card_slot"]].tolist()[0] + 1]
+        elif balatro_action_id in (14, 19):  # USE_CONSUMABLE, SELL_CONSUMABLE
+            return [rl_action[self.slices["consumable_slot"]].tolist()[0] + 1]
         return []

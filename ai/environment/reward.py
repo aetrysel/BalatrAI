@@ -80,10 +80,14 @@ class BalatroRewardCalculator:
             reward -= 1.0 * jokers_sold
             breakdown.append(f"jokers_sold x{jokers_sold}: -{1.0 * jokers_sold:.1f}")
 
-        if current_money > prev_money and money_spent <= 0:
+        curr_consumable_count = len(current_game_state.get('consumables', []))
+        prev_consumable_count = len(prev_game_state.get('consumables', []))
+        is_sell = len(current_jokers) < prev_joker_count or curr_consumable_count < prev_consumable_count
+
+        if current_money > prev_money and not is_sell:
             money_gained = current_money - prev_money
-            reward += money_gained * 0.5
-            breakdown.append(f"money_earned +{money_gained}: +{money_gained * 0.5:.2f}")
+            reward += money_gained * 0.4
+            breakdown.append(f"money_earned +{money_gained}: +{money_gained * 0.4:.2f}")
 
         if money_spent > 0:
             if jokers_gained > 0:
@@ -95,10 +99,13 @@ class BalatroRewardCalculator:
                 reward -= penalty
                 breakdown.append(f"money_spent_penalty -{money_spent}: -{penalty:.2f}")
 
-        max_joker_slots = 5
-        utilization = len(current_jokers) / max_joker_slots
-        reward += utilization * 0.5
-        breakdown.append(f"joker_utilization ({len(current_jokers)}/5): +{utilization * 0.5:.2f}")
+        prev_state_id = prev_game_state.get('state', 0)
+        curr_state_id = current_game_state.get('state', 0)
+        if prev_state_id == SHOP_STATE_ID and curr_state_id != SHOP_STATE_ID:
+            max_joker_slots = 5
+            utilization = len(current_jokers) / max_joker_slots
+            reward += utilization * 1.0
+            breakdown.append(f"joker_utilization_exit ({len(current_jokers)}/5): +{utilization:.2f}")
 
         if current_money == 0 and len(current_jokers) == 0:
             reward -= 3.0
@@ -122,8 +129,6 @@ class BalatroRewardCalculator:
             reward += 8.0
             breakdown.append("voucher_purchased: +8.00")
 
-        prev_state_id = prev_game_state.get('state', 0)
-        curr_state_id = current_game_state.get('state', 0)
         if prev_state_id == SHOP_STATE_ID and curr_state_id in PACK_STATE_IDS:
             reward += 3.0
             breakdown.append("entered_pack: +3.00")
@@ -136,9 +141,7 @@ class BalatroRewardCalculator:
             breakdown.append("buy_and_use_consumable: +2.00")
 
         # SELL_CONSUMABLE: owned consumable count dropped and money increased
-        prev_owned_consumables = len(prev_game_state.get('consumables', []))
-        curr_owned_consumables = len(current_game_state.get('consumables', []))
-        if curr_owned_consumables < prev_owned_consumables and current_money > prev_money:
+        if curr_consumable_count < prev_consumable_count and current_money > prev_money:
             reward -= 0.5
             breakdown.append("sell_consumable_penalty: -0.50")
 
@@ -234,13 +237,29 @@ class BalatroRewardCalculator:
         # Track peak chips for accurate game-over reporting
         self.highest_chips_this_blind = max(self.highest_chips_this_blind, current_chips)
 
-        # === USE_CONSUMABLE REWARD ===
+        # === CONSUMABLE USE / SELL / MONEY EARNED ===
         if prev_state:
             prev_consumable_count = len(prev_game_state.get('consumables', []))
             curr_consumable_count = len(inner_game_state.get('consumables', []))
-            if curr_consumable_count < prev_consumable_count and inner_game_state.get('state', 0) == 1:
+            consumable_decreased = curr_consumable_count < prev_consumable_count
+
+            current_gold = inner_game_state.get('gold', 0)
+            prev_gold = prev_game_state.get('gold', self.previous_money)
+            gold_increased = current_gold > prev_gold
+
+            # Sell = consumable gone AND gold went up; use = consumable gone AND gold didn't go up
+            is_consumable_sell = consumable_decreased and gold_increased
+            is_consumable_use = consumable_decreased and not is_consumable_sell
+
+            if is_consumable_use:
                 reward += 2.0
                 reward_breakdown.append("use_consumable: +2.00")
+
+            # Money earned from non-sell sources: gold cards, joker effects, blind payouts, interest
+            if gold_increased and not is_consumable_sell:
+                money_reward = (current_gold - prev_gold) * 0.4
+                reward += money_reward
+                reward_breakdown.append(f"money_earned +{current_gold - prev_gold}: +{money_reward:.2f}")
 
         # === RETRY PENALTY ===
         if retry_count > 0:
