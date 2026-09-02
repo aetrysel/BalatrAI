@@ -120,6 +120,7 @@ class BalatroEnv(gym.Env):
         self.prev_state = None
         self.game_over = False
         self.actions_taken = []
+        self._episode_accumulated_reward = 0.0
         
         if self.restart_pending:
             self.restart_pending = False
@@ -145,10 +146,11 @@ class BalatroEnv(gym.Env):
         # Process initial state for SB3
         self.current_state = initial_request
         gs_for_ep = self.current_state.get('game_state', {})
+        actual_seed = self.seed if self.seed else gs_for_ep.get('seed', '')
         self.history_logger.new_episode(
             episode_num=self._episode_count,
             deck=gs_for_ep.get('deck_name', self.deck),
-            seed=str(self.seed) if self.seed else "",
+            seed=str(actual_seed) if actual_seed else "",
             stake=self.stake,
         )
         initial_observation = self.state_mapper.process_game_state(self.current_state)
@@ -200,9 +202,10 @@ class BalatroEnv(gym.Env):
                 current_state=self.current_state,
                 prev_state=self.prev_state or {},
             )
+            self._episode_accumulated_reward += win_reward
             self.history_logger.log_step(self.prev_state, response_data, self.current_state)
             self.history_logger.log_win(self.current_state, self._episode_count)
-            self.history_logger.log_episode_end(win_reward, self.reward_calculator.episode_reward_breakdown)
+            self.history_logger.log_episode_end(self._episode_accumulated_reward, self.reward_calculator.episode_reward_breakdown)
             self.replay_system.try_save_replay(
                 file_path=self.replay_system.REPLAY_FILE_PATH,
                 seed=current_gs.get('seed', ''),
@@ -232,7 +235,7 @@ class BalatroEnv(gym.Env):
             # Endless: count as win but continue — consume next state (SHOP after cash_out)
             next_request = self.pipe_io.wait_for_request()
             if not next_request:
-                self.history_logger.log_episode_end(win_reward, self.reward_calculator.episode_reward_breakdown)
+                self.history_logger.log_episode_end(self._episode_accumulated_reward, self.reward_calculator.episode_reward_breakdown)
                 return win_obs, win_reward, True, False, {**win_info, "timeout": True}
             self.current_state = next_request
             available_actions = next_request.get('available_actions', [])
@@ -250,7 +253,7 @@ class BalatroEnv(gym.Env):
             self.game_over = True
             observation = self.state_mapper.process_game_state(self.current_state)
             reward = 0.0
-            self.history_logger.log_episode_end(reward, self.reward_calculator.episode_reward_breakdown)
+            self.history_logger.log_episode_end(self._episode_accumulated_reward, self.reward_calculator.episode_reward_breakdown)
             return observation, reward, True, False, {"timeout": True}
         _ngs = next_request.get('game_state', {})
         self.logger.info(f"Received request, state: {_ngs.get('state', '?')}, round: {_ngs.get('round_count', 0)}, actions: {next_request.get('available_actions', [])}")
@@ -270,9 +273,10 @@ class BalatroEnv(gym.Env):
                 current_state=game_over_state,
                 prev_state=self.prev_state or {},
             )
+            self._episode_accumulated_reward += reward
             self.restart_pending = True
             self.history_logger.log_step(self.prev_state, response_data, next_request)
-            self.history_logger.log_episode_end(reward, self.reward_calculator.episode_reward_breakdown)
+            self.history_logger.log_episode_end(self._episode_accumulated_reward, self.reward_calculator.episode_reward_breakdown)
             last_gs = self.current_state.get('game_state', {})
             return observation, reward, True, False, {
                 "won": False,
@@ -296,7 +300,7 @@ class BalatroEnv(gym.Env):
             self.pipe_io.send_response(restart_response)
             next_request = self.pipe_io.wait_for_request()
             if not next_request:
-                self.history_logger.log_episode_end(0.0, self.reward_calculator.episode_reward_breakdown)
+                self.history_logger.log_episode_end(self._episode_accumulated_reward, self.reward_calculator.episode_reward_breakdown)
                 return (
                     self.state_mapper.process_game_state(self.current_state),
                     0.0, True, False, {"timeout": True}
@@ -316,6 +320,7 @@ class BalatroEnv(gym.Env):
             current_state=self.current_state,
             prev_state=self.prev_state if self.prev_state else {}
         )
+        self._episode_accumulated_reward += reward
         terminated = False
         truncated = False
 
