@@ -48,7 +48,7 @@ class BalatroRewardCalculator:
             "decent": 20.0
         }
 
-    PACK_STATE_IDS = {9, 10, 15, 17, 18}
+    PACK_STATE_IDS = {9, 10, 15, 17, 18, 999}  # 999 = SMODS_BOOSTER_OPENED (Steamodded)
 
     def calculate_reward(self, current_state, prev_state=None):
         self._started = True
@@ -128,6 +128,20 @@ class BalatroRewardCalculator:
         if prev_state_id == 5 and curr_state_id in self.PACK_STATE_IDS:
             reward += 3.0
             breakdown.append("entered_pack: +3.00")
+
+        # BUY_AND_USE_CONSUMABLE: consumable shop item disappeared and money was spent
+        prev_consumable_shop = [it for it in prev_shop_items if it.get('type') == 'consumable']
+        curr_consumable_shop = [it for it in curr_shop_items if it.get('type') == 'consumable']
+        if len(prev_consumable_shop) > len(curr_consumable_shop) and money_spent > 0:
+            reward += 2.0
+            breakdown.append("buy_and_use_consumable: +2.00")
+
+        # SELL_CONSUMABLE: owned consumable count dropped and money increased
+        prev_owned_consumables = len(prev_game_state.get('consumables', []))
+        curr_owned_consumables = len(current_game_state.get('consumables', []))
+        if curr_owned_consumables < prev_owned_consumables and current_money > prev_money:
+            reward -= 0.5
+            breakdown.append("sell_consumable_penalty: -0.50")
 
         scaled = float(np.tanh(reward / 5.0) * 5.0)
         if breakdown:
@@ -423,4 +437,4 @@ class BalatroRewardCalculator:
         rounds = self._all_rounds_for_log()
         self._log_rounds(rounds)
         jokers_str = ', '.join(self.episode_jokers) if self.episode_jokers else 'None'
-        print(f"   Jokers: [{jokers_str}]")
+        print(f"   Jokers: [{jokers_str}]\n\n")

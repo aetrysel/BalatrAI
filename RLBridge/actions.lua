@@ -327,11 +327,19 @@ local action_registry = {
     },
     skip_booster = {
         execute = function(params)
-            ACTIONS.reset_state()
             return input.skip_booster()
         end,
         available_when = function()
-            return is_pack_state()
+            if not is_pack_state() then return false end
+            -- In SMODS state 999, G.pack_cards isn't populated until ~1.3s after entry.
+            -- Wait until cards exist OR pack is already exhausted to avoid rapid-fire
+            -- calls that crash end_consumeable() via a nil G.booster_pack race condition.
+            if G.STATES.SMODS_BOOSTER_OPENED and G.STATE == G.STATES.SMODS_BOOSTER_OPENED then
+                local pack_ready = (G.pack_cards and G.pack_cards.cards and #G.pack_cards.cards > 0)
+                                or (G.GAME.pack_choices ~= nil and G.GAME.pack_choices == 0)
+                if not pack_ready then return false end
+            end
+            return not action_state.skip_booster
         end,
     },
 }
@@ -373,7 +381,7 @@ function ACTIONS.execute_action(action_id, params)
     if action_def and action_def.execute then
         local result = action_def.execute(params)
         if result.success then
-            if action_name == "play_hand" or action_name == "discard_hand" or action_name == "skip_booster" then
+            if action_name == "play_hand" or action_name == "discard_hand" then
                 ACTIONS.reset_state()
             else
                 ACTIONS.mark_executed(action_name)
