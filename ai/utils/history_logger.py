@@ -8,12 +8,13 @@ TOC at the top of each episode block can reference accurate line numbers.
 import os
 from datetime import datetime
 from pathlib import Path
+from .constants import SHOP_STATE_ID
 
 STATE_NAMES = {
-    1: "SELECTING_HAND", 5: "SHOP", 7: "BLIND_SELECT",
-    8: "ROUND_EVAL", 9: "TAROT_PACK", 10: "PLANET_PACK",
-    15: "SPECTRAL_PACK", 17: "STANDARD_PACK", 18: "BUFFOON_PACK",
-    6: "GAME_OVER", 4: "MENU",
+    1: "SELECTING_HAND", 4: "MENU", 5: "SHOP",
+    6: "GAME_OVER", 7: "BLIND_SELECT", 8: "ROUND_EVAL",
+    9: "TAROT_PACK", 10: "PLANET_PACK", 15: "SPECTRAL_PACK",
+    17: "STANDARD_PACK", 18: "BUFFOON_PACK", 999: "SMODS_BOOSTER_OPENED",
 }
 
 ACTION_NAMES = {
@@ -22,7 +23,8 @@ ACTION_NAMES = {
     7: "BUY_JOKER", 8: "SELL_JOKER", 9: "REROLL_SHOP",
     10: "SKIP_SHOP", 11: "CASH_OUT", 12: "BUY_VOUCHER",
     13: "BUY_BOOSTER", 14: "USE_CONSUMABLE",
-    15: "SELECT_PACK_CARD", 16: "SKIP_PACK",
+    15: "SELECT_PACK_CARD", 16: "SKIP_BOOSTER", 17: "SKIP_BLIND",
+    18: "BUY_AND_USE_CONSUMABLE", 19: "SELL_CONSUMABLE",
 }
 
 SUIT_SYMBOLS = {"Spades": "♠", "Hearts": "♥", "Clubs": "♣", "Diamonds": "♦"}
@@ -87,7 +89,7 @@ class HistoryLogger:
         next_gs = next_state.get('game_state', {})
 
         # Shop visit tracking: count transitions into SHOP state
-        if prev_gs.get('state', 0) != 5 and next_gs.get('state', 0) == 5:
+        if prev_gs.get('state', 0) != SHOP_STATE_ID and next_gs.get('state', 0) == SHOP_STATE_ID:
             self._shop_count += 1
 
         action_id = action_data.get('action', 0)
@@ -135,6 +137,15 @@ class HistoryLogger:
                 boosters = [it for it in shop_items if it.get('type') == 'booster']
                 item = boosters[params[0] - 1] if params and 0 < params[0] <= len(boosters) else {}
                 self._money_log.append(f"  BUY_BOOSTER \"{item.get('name', '?')}\": {delta:+d} (${prev_gold} → ${next_gold})")
+            elif action_id == 18:  # BUY_AND_USE_CONSUMABLE
+                shop_items = prev_gs.get('shop', {}).get('items', [])
+                consumables = [it for it in shop_items if it.get('type') == 'consumable']
+                item = consumables[params[0] - 1] if params and 0 < params[0] <= len(consumables) else {}
+                self._money_log.append(f"  BUY_AND_USE \"{item.get('name', '?')}\": {delta:+d} (${prev_gold} → ${next_gold})")
+            elif action_id == 19:  # SELL_CONSUMABLE
+                consumables_list = prev_gs.get('consumables', [])
+                item = consumables_list[params[0] - 1] if params and 0 < params[0] <= len(consumables_list) else {}
+                self._money_log.append(f"  SELL_CONSUMABLE \"{item.get('name', '?')}\": {delta:+d} (${prev_gold} → ${next_gold})")
 
         # Blind clear detection — record after _ep_write so buf_pos reflects this line
         if next_gs.get('blind_cleared', 0) == 1:
@@ -225,8 +236,26 @@ class HistoryLogger:
                 return f"SELECT_PACK_CARD \"{card['name']}\" ({card.get('item_set', '?')})"
             return f"SELECT_PACK_CARD slot:{slot}"
 
-        elif action_id == 16:  # SKIP_PACK
-            return "SKIP_PACK"
+        elif action_id == 16:  # SKIP_BOOSTER
+            return "SKIP_BOOSTER"
+
+        elif action_id == 17:  # SKIP_BLIND
+            return "SKIP_BLIND"
+
+        elif action_id == 18:  # BUY_AND_USE_CONSUMABLE
+            shop_items = prev_gs.get('shop', {}).get('items', [])
+            consumables = [it for it in shop_items if it.get('type') == 'consumable']
+            item = consumables[slot - 1] if slot and 0 < slot <= len(consumables) else None
+            if item:
+                return f"BUY_AND_USE \"{item['name']}\" (${item.get('cost', '?')})"
+            return f"BUY_AND_USE slot:{slot}"
+
+        elif action_id == 19:  # SELL_CONSUMABLE
+            consumables = prev_gs.get('consumables', [])
+            item = consumables[slot - 1] if slot and 0 < slot <= len(consumables) else None
+            if item:
+                return f"SELL_CONSUMABLE \"{item['name']}\" (+${item.get('sell_cost', '?')})"
+            return f"SELL_CONSUMABLE slot:{slot}"
 
         return ACTION_NAMES.get(action_id, f"ACTION_{action_id}")
 
@@ -249,7 +278,7 @@ class HistoryLogger:
             discards_left = next_gs.get('round', {}).get('discards_left', '?')
             return f"discards left: {discards_left}"
 
-        elif action_id in (7, 13, 12):  # BUY_JOKER, BUY_BOOSTER, BUY_VOUCHER
+        elif action_id in (7, 13, 12, 18):  # BUY_JOKER, BUY_BOOSTER, BUY_VOUCHER, BUY_AND_USE
             gold_before = prev_gs.get('gold', 0)
             gold_after = next_gs.get('gold', 0)
             parts = [f"${gold_before} → ${gold_after}"]
@@ -260,7 +289,7 @@ class HistoryLogger:
                 parts.append(f"jokers: {prev_joker_count} → {next_joker_count} (+\"{new_joker.get('name', '?')}\")")
             return " | ".join(parts)
 
-        elif action_id == 8:  # SELL_JOKER
+        elif action_id in (8, 19):  # SELL_JOKER, SELL_CONSUMABLE
             gold_before = prev_gs.get('gold', 0)
             gold_after = next_gs.get('gold', 0)
             return f"${gold_before} → ${gold_after}"

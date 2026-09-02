@@ -1,5 +1,6 @@
 from typing import Dict, Any
 import numpy as np
+from ..utils.constants import PACK_STATE_IDS, SHOP_STATE_ID
 
 class BalatroRewardCalculator:
     def __init__(self):
@@ -47,8 +48,6 @@ class BalatroRewardCalculator:
             "good": 40.0,
             "decent": 20.0
         }
-
-    PACK_STATE_IDS = {9, 10, 15, 17, 18, 999}  # 999 = SMODS_BOOSTER_OPENED (Steamodded)
 
     def calculate_reward(self, current_state, prev_state=None):
         self._started = True
@@ -125,7 +124,7 @@ class BalatroRewardCalculator:
 
         prev_state_id = prev_game_state.get('state', 0)
         curr_state_id = current_game_state.get('state', 0)
-        if prev_state_id == 5 and curr_state_id in self.PACK_STATE_IDS:
+        if prev_state_id == SHOP_STATE_ID and curr_state_id in PACK_STATE_IDS:
             reward += 3.0
             breakdown.append("entered_pack: +3.00")
 
@@ -161,7 +160,7 @@ class BalatroRewardCalculator:
         prev_state_id = prev_game_state.get('state', 0)
         curr_state_id = current_game_state.get('state', 0)
 
-        if prev_state_id not in self.PACK_STATE_IDS:
+        if prev_state_id not in PACK_STATE_IDS:
             return reward
 
         prev_choices = prev_game_state.get('pack_choices', 0)

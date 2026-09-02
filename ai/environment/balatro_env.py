@@ -16,6 +16,9 @@ from .reward import BalatroRewardCalculator
 from ..utils.mappers import BalatroStateMapper, BalatroActionMapper
 from ..utils.replay import ReplaySystem
 from ..utils.history_logger import HistoryLogger
+from ..utils.constants import (
+    PACK_STATE_IDS, SHOP_STATE_ID, ROUND_EVAL_STATE_ID, BLIND_SELECT_STATE_ID
+)
 
 
 class BalatroEnv(gym.Env):
@@ -62,7 +65,7 @@ class BalatroEnv(gym.Env):
         self._episode_count = 0
 
         # Action space constants
-        self.MAX_ACTIONS = 17        # actions 0-16 (balatro IDs 1-17)
+        self.MAX_ACTIONS = 19        # actions 0-18 (balatro IDs 1-19)
         self.MAX_CARDS = 8           # binary card selectors
         self.MAX_SHOP_SLOTS = 5      # shared by BUY_JOKER and BUY_BOOSTER
         self.MAX_JOKER_SLOTS = 5     # for SELL_JOKER
@@ -99,7 +102,8 @@ class BalatroEnv(gym.Env):
         )
 
         # Initialize mappers
-        self.state_mapper = BalatroStateMapper(observation_size=self.OBSERVATION_SIZE, max_actions=self.MAX_ACTIONS)
+        # Observation action-mask stays 17 bits (actions 18/19 visible only via MultiDiscrete mask)
+        self.state_mapper = BalatroStateMapper(observation_size=self.OBSERVATION_SIZE, max_actions=17)
         self.action_mapper = BalatroActionMapper(action_slices=slices)
     
     def reset(self, seed=None, options=None):
@@ -177,9 +181,9 @@ class BalatroEnv(gym.Env):
 
         current_gs = self.current_state.get('game_state', {})
         state_id = current_gs.get('state', 0)
-        is_game_win = (state_id == 8 and current_gs.get('game_win', 0) == 1)
+        is_game_win = (state_id == ROUND_EVAL_STATE_ID and current_gs.get('game_win', 0) == 1)
 
-        if state_id == 8:  # ROUND_EVAL: force CASH_OUT (ai index 10 → balatro 11)
+        if state_id == ROUND_EVAL_STATE_ID:  # ROUND_EVAL: force CASH_OUT (ai index 10 → balatro 11)
             action[self.slices["action_selection"]] = [10]
 
         # Send action response to Balatro mod
@@ -364,8 +368,6 @@ class BalatroEnv(gym.Env):
         # Safe fallback: allow all actions
         return np.ones(sum(self.action_space.nvec), dtype=bool)
     
-    PACK_STATE_IDS = {9, 10, 15, 17, 18, 999}  # 999 = SMODS_BOOSTER_OPENED (Steamodded)
-
     def _create_action_mask(self, available_actions, current_game_state):
         """Create action mask for MultiDiscrete space."""
         action_masks = []
@@ -381,7 +383,7 @@ class BalatroEnv(gym.Env):
         }
 
         action_selection_mask = [False] * self.MAX_ACTIONS
-        if state_id == 8:  # ROUND_EVAL — force CASH_OUT (ai index 10)
+        if state_id == ROUND_EVAL_STATE_ID:  # ROUND_EVAL — force CASH_OUT (ai index 10)
             action_selection_mask[10] = True
         else:
             for action_id in available_actions:
@@ -390,7 +392,7 @@ class BalatroEnv(gym.Env):
                     action_selection_mask[ai_idx] = True
         action_masks.append(action_selection_mask)
 
-        if state_id == 8:
+        if state_id == ROUND_EVAL_STATE_ID:
             # ROUND_EVAL: block all param slots
             for _ in range(self.MAX_CARDS):
                 action_masks.append([True, False])
@@ -399,7 +401,7 @@ class BalatroEnv(gym.Env):
             action_masks.append([False] * self.MAX_CONSUMABLE_SLOTS)
             action_masks.append([False] * self.MAX_PACK_SLOTS)
 
-        elif state_id in self.PACK_STATE_IDS:
+        elif state_id in PACK_STATE_IDS:
             # Tarot/spectral packs let the agent highlight hand cards as consumable targets
             can_select_hand = state_id in {9, 15}  # TAROT_PACK=9, SPECTRAL_PACK=15 (vanilla)
             if state_id == 999:  # SMODS_BOOSTER_OPENED: detect type from pack card set
@@ -417,7 +419,7 @@ class BalatroEnv(gym.Env):
                 pack_mask[i] = True
             action_masks.append(pack_mask)
 
-        elif state_id == 5:
+        elif state_id == SHOP_STATE_ID:
             # SHOP: disable card selection, enable shop/joker/booster slots
             for _ in range(self.MAX_CARDS):
                 action_masks.append([True, False])
@@ -457,7 +459,7 @@ class BalatroEnv(gym.Env):
             action_masks.append(consumable_mask)
             action_masks.append([False] * self.MAX_PACK_SLOTS)
 
-        elif state_id == 7:  # BLIND_SELECT
+        elif state_id == BLIND_SELECT_STATE_ID:  # BLIND_SELECT
             for _ in range(self.MAX_CARDS):
                 action_masks.append([True, False])
             action_masks.append([False] * self.MAX_SHOP_SLOTS)

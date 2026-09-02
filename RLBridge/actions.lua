@@ -322,6 +322,7 @@ local action_registry = {
             return is_pack_state()
                 and G.pack_cards and G.pack_cards.cards and #G.pack_cards.cards > 0
                 and (G.GAME.pack_choices or 0) > 0
+                and utils.is_game_ready_for_action()
                 and not action_state.select_pack_card
         end,
     },
@@ -339,7 +340,9 @@ local action_registry = {
                 end
             end
             -- Only available when choices remain; pack auto-closes when pack_choices reaches 0.
-            return (G.GAME.pack_choices or 0) > 0 and not action_state.skip_booster
+            return (G.GAME.pack_choices or 0) > 0
+                and utils.is_game_ready_for_action()
+                and not action_state.skip_booster
         end,
     },
 }
