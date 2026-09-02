@@ -297,6 +297,7 @@ local action_registry = {
             return (G.STATE == G.STATES.SHOP
                 or G.STATE == G.STATES.SELECTING_HAND
                 or G.STATE == G.STATES.ROUND_EVAL
+                or G.STATE == G.STATES.BLIND_SELECT
                 or is_pack_state())
                 and G.consumeables and G.consumeables.cards and #G.consumeables.cards > 0
                 and utils.is_game_ready_for_action()
@@ -313,6 +314,7 @@ local action_registry = {
             return (G.STATE == G.STATES.SELECTING_HAND
                 or G.STATE == G.STATES.SHOP
                 or G.STATE == G.STATES.ROUND_EVAL
+                or G.STATE == G.STATES.BLIND_SELECT
                 or is_pack_state())
                 and G.consumeables and G.consumeables.cards and #G.consumeables.cards > 0
                 and utils.is_game_ready_for_action()
