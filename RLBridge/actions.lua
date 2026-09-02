@@ -332,14 +332,14 @@ local action_registry = {
         available_when = function()
             if not is_pack_state() then return false end
             -- In SMODS state 999, G.pack_cards isn't populated until ~1.3s after entry.
-            -- Wait until cards exist OR pack is already exhausted to avoid rapid-fire
-            -- calls that crash end_consumeable() via a nil G.booster_pack race condition.
+            -- Wait for cards to load before allowing any pack interaction.
             if G.STATES.SMODS_BOOSTER_OPENED and G.STATE == G.STATES.SMODS_BOOSTER_OPENED then
-                local pack_ready = (G.pack_cards and G.pack_cards.cards and #G.pack_cards.cards > 0)
-                                or (G.GAME.pack_choices ~= nil and G.GAME.pack_choices == 0)
-                if not pack_ready then return false end
+                if not (G.pack_cards and G.pack_cards.cards and #G.pack_cards.cards > 0) then
+                    return false
+                end
             end
-            return not action_state.skip_booster
+            -- Only available when choices remain; pack auto-closes when pack_choices reaches 0.
+            return (G.GAME.pack_choices or 0) > 0 and not action_state.skip_booster
         end,
     },
 }
