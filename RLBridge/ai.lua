@@ -57,6 +57,13 @@ end
 --- Monitors game state changes, handles communication, and executes AI actions
 --- @return nil
 function AI.update()
+    -- In pack states, wait for ALL events (including non-blocking animation events) to drain
+    -- before allowing any action. Handy mod removes animations but leaves event callbacks that
+    -- hold card object references; acting before they complete causes conv_card nil crashes.
+    if is_pack_state(G.STATE) and not utils.is_event_queue_empty() then
+        return
+    end
+
     if win_screen_active then
         win_screen_timer = win_screen_timer + (G.FPS_CAP and (1/G.FPS_CAP) or 0.016)
         if win_screen_timer > 30.0 then
