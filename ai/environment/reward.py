@@ -263,7 +263,7 @@ class BalatroRewardCalculator:
 
         # === RETRY PENALTY ===
         if retry_count > 0:
-            retry_penalty = -0.1 * retry_count
+            retry_penalty = max(-0.5, -0.05 * retry_count)
             reward += retry_penalty
             reward_breakdown.append(f"retry_penalty: {retry_penalty:.2f}")
 
@@ -330,9 +330,9 @@ class BalatroRewardCalculator:
             blind_req = self.current_blind_chips if self.current_blind_chips else blind_chips
             progress = min(1.0, self.highest_chips_this_blind / max(1, blind_req))
             progress_credit = 8.0 * progress
-            reward -= 10.0
+            reward -= 15.0
             reward += progress_credit
-            reward_breakdown.append(f"Game over: -10.0 + progress_credit {progress:.1%}: +{progress_credit:.2f}")
+            reward_breakdown.append(f"Game over: -15.0 + progress_credit {progress:.1%}: +{progress_credit:.2f}")
             self.game_over_penalty_applied = True
             # Capture context for CLI output
             self.game_over_chips = self.highest_chips_this_blind
