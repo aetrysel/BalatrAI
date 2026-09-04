@@ -14,17 +14,23 @@ class BalatroMetricsCallback(BaseCallback):
         self.total_blind_attempts = 0   # SELECT_BLIND (action 5) only
         self.total_blind_selections = 0  # attempts + skips (for overall skip rate)
         self.total_blind_skips = 0
-        self.total_consumables_used = 0
+        self.total_consumables_used = 0    # successful: action 14 (count decreased) + action 18
+        self.total_consumables_failed = 0  # failed: action 14 but count didn't decrease
+        self.total_consumables_sold = 0    # sold: action 19
+        self.total_boss_blind_clears = 0
+        self.total_boss_blind_encounters = 0  # clears + losses on boss blinds
 
         # Best-ever metrics
         self.best_ante = 0
         self.best_round = 0
-        self.highest_chips = 0
+        self.highest_blind_score = 0
+        self.highest_single_hand_score = 0
         self.max_money_ever = 0
 
         # All-time hand type tracking
         self.hand_type_counts = defaultdict(int)
         self.hand_type_scores = defaultdict(list)
+        self.hand_type_max_scores = defaultdict(int)
 
         # Sliding window for win rate (last 100 episodes)
         self.recent_window = 100
@@ -32,6 +38,9 @@ class BalatroMetricsCallback(BaseCallback):
 
         # Rolling last-100 blind outcomes (1=cleared, 0=failed)
         self.recent_blind_outcomes = deque(maxlen=100)
+
+        # Rolling last-100 boss blind outcomes (1=cleared, 0=failed)
+        self.recent_boss_blind_outcomes = deque(maxlen=100)
 
         # --- Per-episode accumulators (reset at episode end) ---
         self.current_run_length = 0
@@ -44,7 +53,9 @@ class BalatroMetricsCallback(BaseCallback):
         self.episode_blind_skips = 0
         self.episode_jokers_gained = 0
         self.episode_jokers_sold = 0
-        self.consumables_used_this_episode = 0
+        self.episode_consumables_used = 0
+        self.episode_consumables_failed = 0
+        self.episode_consumables_sold = 0
 
         # Previous-step deltas
         self._prev_chips = 0
@@ -65,7 +76,10 @@ class BalatroMetricsCallback(BaseCallback):
         self._rollout_jokers_gained = []
         self._rollout_jokers_sold = []
         self._rollout_jokers_end = []
+        self._rollout_joker_buy_sell_ratios = []
         self._rollout_consumables_used = []
+        self._rollout_consumables_failed = []
+        self._rollout_consumables_sold = []
         self._rollout_blind_skip_rates = []
         self._rollout_hand_counts = defaultdict(int)
 
@@ -93,14 +107,28 @@ class BalatroMetricsCallback(BaseCallback):
                 self.hand_type_counts[hand_type] += 1
                 self.hand_type_scores[hand_type].append(chip_gain)
                 self._rollout_hand_counts[hand_type] += 1
+                if chip_gain > self.hand_type_max_scores[hand_type]:
+                    self.hand_type_max_scores[hand_type] = chip_gain
+                if chip_gain > self.highest_single_hand_score:
+                    self.highest_single_hand_score = chip_gain
             self._prev_chips = curr_chips
 
-            # Consumable usage (count decrease = successful use)
+            # Consumable tracking split by action type
             curr_consumables = info.get("consumable_count", 0)
-            if curr_consumables < self._prev_consumable_count:
-                used = self._prev_consumable_count - curr_consumables
-                self.total_consumables_used += used
-                self.consumables_used_this_episode += used
+            action_taken = info.get("action_taken", 0)
+            if action_taken == 14:  # USE_CONSUMABLE: success = count decreased
+                if curr_consumables < self._prev_consumable_count:
+                    self.total_consumables_used += 1
+                    self.episode_consumables_used += 1
+                else:
+                    self.total_consumables_failed += 1
+                    self.episode_consumables_failed += 1
+            elif action_taken == 18:  # BUY_AND_USE_CONSUMABLE: always counts as used
+                self.total_consumables_used += 1
+                self.episode_consumables_used += 1
+            elif action_taken == 19:  # SELL_CONSUMABLE
+                self.total_consumables_sold += 1
+                self.episode_consumables_sold += 1
             self._prev_consumable_count = curr_consumables
 
             # Money tracking
@@ -123,7 +151,6 @@ class BalatroMetricsCallback(BaseCallback):
             self._prev_joker_count = curr_joker_count
 
             # Action tracking
-            action_taken = info.get("action_taken", 0)
             if action_taken == 2:
                 self.episode_plays += 1
             elif action_taken == 3:
@@ -145,10 +172,14 @@ class BalatroMetricsCallback(BaseCallback):
                 self.total_blind_clears += 1
                 self._rollout_blind_clears += 1
                 clear_chips = info.get("chips", 0)  # cumulative blind score; chips only increases during a blind
-                if clear_chips > self.highest_chips:
-                    self.highest_chips = clear_chips
+                if clear_chips > self.highest_blind_score:
+                    self.highest_blind_score = clear_chips
                 self._rollout_chips.append(clear_chips)
                 self.recent_blind_outcomes.append(1)
+                if info.get("blind_is_boss", False):
+                    self.total_boss_blind_clears += 1
+                    self.total_boss_blind_encounters += 1
+                    self.recent_boss_blind_outcomes.append(1)
 
             if not done:
                 continue
@@ -169,6 +200,12 @@ class BalatroMetricsCallback(BaseCallback):
             # Failed blind outcome (timeout is not a blind failure)
             if not won and not info.get("timeout", False):
                 self.recent_blind_outcomes.append(0)
+                if info.get("blind_is_boss", False):
+                    self.total_boss_blind_encounters += 1
+                    self.recent_boss_blind_outcomes.append(0)
+                death_chips = info.get("chips", 0)
+                if death_chips > self.highest_blind_score:
+                    self.highest_blind_score = death_chips
 
             if ante > self.best_ante or (ante == self.best_ante and round_ > self.best_round):
                 self.best_ante = ante
@@ -186,7 +223,11 @@ class BalatroMetricsCallback(BaseCallback):
             self._rollout_jokers_gained.append(self.episode_jokers_gained)
             self._rollout_jokers_sold.append(self.episode_jokers_sold)
             self._rollout_jokers_end.append(len(info.get("jokers", [])))
-            self._rollout_consumables_used.append(self.consumables_used_this_episode)
+            self._rollout_joker_buy_sell_ratios.append(
+                self.episode_jokers_gained / max(1, self.episode_jokers_sold))
+            self._rollout_consumables_used.append(self.episode_consumables_used)
+            self._rollout_consumables_failed.append(self.episode_consumables_failed)
+            self._rollout_consumables_sold.append(self.episode_consumables_sold)
             ep_blind_total = self.episode_blind_attempts + self.episode_blind_skips
             self._rollout_blind_skip_rates.append(
                 (self.episode_blind_skips / max(1, ep_blind_total)))
@@ -201,45 +242,54 @@ class BalatroMetricsCallback(BaseCallback):
             self.logger.record("game/win_rate_overall",
                                self._win_pct())
             self.logger.record("game/win_rate_last_100",
-                               round(100 * sum(self.recent_outcomes) / max(1, len(self.recent_outcomes)), 2))
+                               round(sum(self.recent_outcomes) / max(1, len(self.recent_outcomes)), 2))
             self.logger.record("game/blind_clear_rate_overall",
                                round(self.total_blind_clears / max(1, self.total_blind_attempts), 2))
             self.logger.record("game/blind_clear_rate_last_100",
-                               round(100 * sum(self.recent_blind_outcomes) / max(1, len(self.recent_blind_outcomes)), 2))
-            self.logger.record("game/highest_chips_ever",    self.highest_chips)
-            self.logger.record("game/best_ante",             self.best_ante)
-            self.logger.record("game/best_round",            self.best_round)
-            self.logger.record("money/max_ever_held",        self.max_money_ever)
-            self.logger.record("custom/total_wins",          self.total_wins)
-            self.logger.record("custom/total_blind_clears",  self.total_blind_clears)
-            self.logger.record("custom/total_consumables_used", self.total_consumables_used)
+                               round(sum(self.recent_blind_outcomes) / max(1, len(self.recent_blind_outcomes)), 2))
+            self.logger.record("game/highest_blind_score",      self.highest_blind_score)
+            self.logger.record("game/highest_single_hand_score", self.highest_single_hand_score)
+            self.logger.record("game/best_ante",                  self.best_ante)
+            self.logger.record("game/best_round",                 self.best_round)
+            self.logger.record("money/max_ever_held",             self.max_money_ever)
+            self.logger.record("custom/total_wins",               self.total_wins)
+            self.logger.record("custom/total_blind_clears",       self.total_blind_clears)
+            self.logger.record("custom/total_boss_blind_clears",  self.total_boss_blind_clears)
+            self.logger.record("game/boss_blind_clear_rate_overall",
+                               round(self.total_boss_blind_clears / max(1, self.total_boss_blind_encounters), 2))
+            self.logger.record("game/boss_blind_clear_rate_last_100",
+                               round(sum(self.recent_boss_blind_outcomes) / max(1, len(self.recent_boss_blind_outcomes)), 2))
             self.logger.record("actions/blind_skip_rate",
                                round(self.total_blind_skips / max(1, self.total_blind_selections), 2))
 
-            # All-time hand type distribution (played types only)
+            # Consumables (all-time totals + derived rates)
+            total_c_attempts = self.total_consumables_used + self.total_consumables_failed
+            self.logger.record("consumables/total_used",      self.total_consumables_used)
+            self.logger.record("consumables/total_failed",    self.total_consumables_failed)
+            self.logger.record("consumables/total_sold",      self.total_consumables_sold)
+            self.logger.record("consumables/success_rate",
+                               round(self.total_consumables_used / max(1, total_c_attempts), 3))
+            self.logger.record("consumables/use_sell_ratio",
+                               round(self.total_consumables_used / max(1, self.total_consumables_sold), 2))
+
+            # Joker per-episode metrics
+            self.logger.record("joker/episode_gained",         self.episode_jokers_gained)
+            self.logger.record("joker/episode_sold",           self.episode_jokers_sold)
+            self.logger.record("joker/episode_end_count",      len(info.get("jokers", [])))
+            self.logger.record("joker/episode_buy_sell_ratio",
+                               self.episode_jokers_gained / max(1, self.episode_jokers_sold))
+
+            # All-time hand type stats (one category per hand type)
             total_hands = sum(self.hand_type_counts.values()) or 1
             for ht in hand_types:
                 count = self.hand_type_counts[ht]
                 if count == 0:
                     continue
                 safe_name = ht.replace(" ", "_").lower()
-                self.logger.record(f"hands/count_{safe_name}", count)
-                self.logger.record(f"hands/pct_{safe_name}",   count / total_hands)
-                if self.hand_type_scores[ht]:
-                    avg_score = sum(self.hand_type_scores[ht]) / len(self.hand_type_scores[ht])
-                    self.logger.record(f"hands/avg_score_{safe_name}", avg_score)
-
-            # --- Per-episode metrics (commented out; restore if desired) ---
-            # chips = info.get("chips", 0)
-            # self.logger.record("game/chips_this_episode",         chips)
-            # self.logger.record("game/run_length_this_episode",    self.current_run_length)
-            # self.logger.record("game/rounds_this_episode",        round_)
-            # self.logger.record("game/ante_this_episode",          ante)
-            # self.logger.record("money/episode_earned",            self.episode_money_earned)
-            # self.logger.record("money/episode_spent",             self.episode_money_spent)
-            # self.logger.record("actions/play_discard_ratio",      self.episode_plays / max(1, self.episode_discards))
-            # self.logger.record("custom/joker_count",              len(info.get("jokers", [])))
-            # self.logger.record("custom/consumables_used_episode", self.consumables_used_this_episode)
+                self.logger.record(f"hand_{safe_name}/count",     count)
+                self.logger.record(f"hand_{safe_name}/pct",       count / total_hands)
+                self.logger.record(f"hand_{safe_name}/avg_score", self._mean(self.hand_type_scores[ht]))
+                self.logger.record(f"hand_{safe_name}/max_score", self.hand_type_max_scores[ht])
 
             # Reset per-episode counters
             self.current_run_length = 0
@@ -256,7 +306,9 @@ class BalatroMetricsCallback(BaseCallback):
             self.episode_blind_skips = 0
             self.episode_jokers_gained = 0
             self.episode_jokers_sold = 0
-            self.consumables_used_this_episode = 0
+            self.episode_consumables_used = 0
+            self.episode_consumables_failed = 0
+            self.episode_consumables_sold = 0
 
             needs_dump = True
 
@@ -274,39 +326,49 @@ class BalatroMetricsCallback(BaseCallback):
 
         if self._rollout_episodes > 0:
             n = self._rollout_episodes
-            self.logger.record("rollout/win_rate",
+            self.logger.record("game_rollout/win_rate",
                                round(100.0 * self._rollout_wins / n, 2))
-            self.logger.record("rollout/blind_clear_rate",
+            self.logger.record("game_rollout/blind_clear_rate",
                                round(self._rollout_blind_clears / max(1, self._rollout_blind_attempts), 2))
-            self.logger.record("rollout/mean_ante",
+            self.logger.record("game_rollout/mean_ante",
                                self._mean(self._rollout_antes))
-            self.logger.record("rollout/mean_money_earned",
+            self.logger.record("game_rollout/mean_money_earned",
                                self._mean(self._rollout_money_earned))
-            self.logger.record("rollout/mean_money_spent",
+            self.logger.record("game_rollout/mean_money_spent",
                                self._mean(self._rollout_money_spent))
-            self.logger.record("rollout/mean_play_discard_ratio",
+            self.logger.record("game_rollout/mean_play_discard_ratio",
                                self._mean(self._rollout_play_discard_ratios))
-            self.logger.record("rollout/mean_jokers_gained",
-                               self._mean(self._rollout_jokers_gained))
-            self.logger.record("rollout/mean_jokers_sold",
-                               self._mean(self._rollout_jokers_sold))
-            self.logger.record("rollout/mean_jokers_end",
-                               self._mean(self._rollout_jokers_end))
-            self.logger.record("rollout/mean_consumables_used",
-                               self._mean(self._rollout_consumables_used))
-            self.logger.record("rollout/mean_blind_skip_rate",
+            self.logger.record("game_rollout/mean_blind_skip_rate",
                                self._mean(self._rollout_blind_skip_rates))
             if self._rollout_chips:
-                self.logger.record("rollout/mean_chips",
+                self.logger.record("game_rollout/mean_blind_score",
                                    self._mean(self._rollout_chips))
 
-            # Rollout hand type distribution (played types only)
+            # Joker rollout metrics
+            self.logger.record("joker/mean_gained",
+                               self._mean(self._rollout_jokers_gained))
+            self.logger.record("joker/mean_sold",
+                               self._mean(self._rollout_jokers_sold))
+            self.logger.record("joker/mean_end_count",
+                               self._mean(self._rollout_jokers_end))
+            self.logger.record("joker/mean_buy_sell_ratio",
+                               self._mean(self._rollout_joker_buy_sell_ratios))
+
+            # Consumable rollout metrics
+            self.logger.record("consumables/mean_used",
+                               self._mean(self._rollout_consumables_used))
+            self.logger.record("consumables/mean_failed",
+                               self._mean(self._rollout_consumables_failed))
+            self.logger.record("consumables/mean_sold",
+                               self._mean(self._rollout_consumables_sold))
+
+            # Rollout hand type distribution (one category per hand type)
             rollout_total = sum(self._rollout_hand_counts.values()) or 1
             for ht in hand_types:
                 if self._rollout_hand_counts[ht] == 0:
                     continue
                 safe_name = ht.replace(" ", "_").lower()
-                self.logger.record(f"hands/pct_{safe_name}_rollout",
+                self.logger.record(f"hand_{safe_name}/pct_rollout",
                                    self._rollout_hand_counts[ht] / rollout_total)
 
         # Reset rollout buffers
@@ -322,7 +384,10 @@ class BalatroMetricsCallback(BaseCallback):
         self._rollout_jokers_gained = []
         self._rollout_jokers_sold = []
         self._rollout_jokers_end = []
+        self._rollout_joker_buy_sell_ratios = []
         self._rollout_consumables_used = []
+        self._rollout_consumables_failed = []
+        self._rollout_consumables_sold = []
         self._rollout_blind_skip_rates = []
         self._rollout_hand_counts = defaultdict(int)
 

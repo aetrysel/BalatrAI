@@ -16,6 +16,9 @@ from .reward import BalatroRewardCalculator
 from ..utils.mappers import BalatroStateMapper, BalatroActionMapper
 from ..utils.replay import ReplaySystem
 from ..utils.history_logger import HistoryLogger
+from ..utils.constants import (
+    PACK_STATE_IDS, SHOP_STATE_ID, ROUND_EVAL_STATE_ID, BLIND_SELECT_STATE_ID
+)
 
 
 class BalatroEnv(gym.Env):
@@ -62,7 +65,7 @@ class BalatroEnv(gym.Env):
         self._episode_count = 0
 
         # Action space constants
-        self.MAX_ACTIONS = 17        # actions 0-16 (balatro IDs 1-17)
+        self.MAX_ACTIONS = 19        # actions 0-18 (balatro IDs 1-19)
         self.MAX_CARDS = 8           # binary card selectors
         self.MAX_SHOP_SLOTS = 5      # shared by BUY_JOKER and BUY_BOOSTER
         self.MAX_JOKER_SLOTS = 5     # for SELL_JOKER
@@ -99,7 +102,8 @@ class BalatroEnv(gym.Env):
         )
 
         # Initialize mappers
-        self.state_mapper = BalatroStateMapper(observation_size=self.OBSERVATION_SIZE, max_actions=self.MAX_ACTIONS)
+        # Observation action-mask stays 17 bits (actions 18/19 visible only via MultiDiscrete mask)
+        self.state_mapper = BalatroStateMapper(observation_size=self.OBSERVATION_SIZE, max_actions=17)
         self.action_mapper = BalatroActionMapper(action_slices=slices)
     
     def reset(self, seed=None, options=None):
@@ -116,6 +120,7 @@ class BalatroEnv(gym.Env):
         self.prev_state = None
         self.game_over = False
         self.actions_taken = []
+        self._episode_accumulated_reward = 0.0
         
         if self.restart_pending:
             self.restart_pending = False
@@ -141,10 +146,11 @@ class BalatroEnv(gym.Env):
         # Process initial state for SB3
         self.current_state = initial_request
         gs_for_ep = self.current_state.get('game_state', {})
+        actual_seed = self.seed if self.seed else gs_for_ep.get('seed', '')
         self.history_logger.new_episode(
             episode_num=self._episode_count,
             deck=gs_for_ep.get('deck_name', self.deck),
-            seed=str(self.seed) if self.seed else "",
+            seed=str(actual_seed) if actual_seed else "",
             stake=self.stake,
         )
         initial_observation = self.state_mapper.process_game_state(self.current_state)
@@ -177,9 +183,9 @@ class BalatroEnv(gym.Env):
 
         current_gs = self.current_state.get('game_state', {})
         state_id = current_gs.get('state', 0)
-        is_game_win = (state_id == 8 and current_gs.get('game_win', 0) == 1)
+        is_game_win = (state_id == ROUND_EVAL_STATE_ID and current_gs.get('game_win', 0) == 1)
 
-        if state_id == 8:  # ROUND_EVAL: force CASH_OUT (ai index 10 → balatro 11)
+        if state_id == ROUND_EVAL_STATE_ID:  # ROUND_EVAL: force CASH_OUT (ai index 10 → balatro 11)
             action[self.slices["action_selection"]] = [10]
 
         # Send action response to Balatro mod
@@ -196,9 +202,10 @@ class BalatroEnv(gym.Env):
                 current_state=self.current_state,
                 prev_state=self.prev_state or {},
             )
+            self._episode_accumulated_reward += win_reward
             self.history_logger.log_step(self.prev_state, response_data, self.current_state)
             self.history_logger.log_win(self.current_state, self._episode_count)
-            self.history_logger.log_episode_end(win_reward, self.reward_calculator.episode_reward_breakdown)
+            self.history_logger.log_episode_end(self._episode_accumulated_reward, self.reward_calculator.episode_reward_breakdown)
             self.replay_system.try_save_replay(
                 file_path=self.replay_system.REPLAY_FILE_PATH,
                 seed=current_gs.get('seed', ''),
@@ -213,6 +220,7 @@ class BalatroEnv(gym.Env):
                 "chips": current_gs.get('chips', 0),
                 "blind_chips": current_gs.get('blind_chips', 0),
                 "blind_cleared": True,
+                "blind_is_boss": current_gs.get('blind_is_boss', 0) == 1,
                 "hand_type": current_gs.get('current_hand', {}).get('last_handname', 'None'),
                 "hand_score": current_gs.get('current_hand', {}).get('last_score', 0),
                 "jokers": current_gs.get('jokers', []),
@@ -227,7 +235,7 @@ class BalatroEnv(gym.Env):
             # Endless: count as win but continue — consume next state (SHOP after cash_out)
             next_request = self.pipe_io.wait_for_request()
             if not next_request:
-                self.history_logger.log_episode_end(win_reward, self.reward_calculator.episode_reward_breakdown)
+                self.history_logger.log_episode_end(self._episode_accumulated_reward, self.reward_calculator.episode_reward_breakdown)
                 return win_obs, win_reward, True, False, {**win_info, "timeout": True}
             self.current_state = next_request
             available_actions = next_request.get('available_actions', [])
@@ -245,7 +253,7 @@ class BalatroEnv(gym.Env):
             self.game_over = True
             observation = self.state_mapper.process_game_state(self.current_state)
             reward = 0.0
-            self.history_logger.log_episode_end(reward, self.reward_calculator.episode_reward_breakdown)
+            self.history_logger.log_episode_end(self._episode_accumulated_reward, self.reward_calculator.episode_reward_breakdown)
             return observation, reward, True, False, {"timeout": True}
         _ngs = next_request.get('game_state', {})
         self.logger.info(f"Received request, state: {_ngs.get('state', '?')}, round: {_ngs.get('round_count', 0)}, actions: {next_request.get('available_actions', [])}")
@@ -265,9 +273,10 @@ class BalatroEnv(gym.Env):
                 current_state=game_over_state,
                 prev_state=self.prev_state or {},
             )
+            self._episode_accumulated_reward += reward
             self.restart_pending = True
             self.history_logger.log_step(self.prev_state, response_data, next_request)
-            self.history_logger.log_episode_end(reward, self.reward_calculator.episode_reward_breakdown)
+            self.history_logger.log_episode_end(self._episode_accumulated_reward, self.reward_calculator.episode_reward_breakdown)
             last_gs = self.current_state.get('game_state', {})
             return observation, reward, True, False, {
                 "won": False,
@@ -276,6 +285,7 @@ class BalatroEnv(gym.Env):
                 "chips": last_gs.get('chips', 0),
                 "blind_chips": last_gs.get('blind_chips', 0),
                 "blind_cleared": False,
+                "blind_is_boss": last_gs.get('blind_is_boss', 0) == 1,
                 "hand_type": last_gs.get('current_hand', {}).get('last_handname', 'None'),
                 "hand_score": last_gs.get('current_hand', {}).get('last_score', 0),
                 "jokers": last_gs.get('jokers', []),
@@ -290,7 +300,7 @@ class BalatroEnv(gym.Env):
             self.pipe_io.send_response(restart_response)
             next_request = self.pipe_io.wait_for_request()
             if not next_request:
-                self.history_logger.log_episode_end(0.0, self.reward_calculator.episode_reward_breakdown)
+                self.history_logger.log_episode_end(self._episode_accumulated_reward, self.reward_calculator.episode_reward_breakdown)
                 return (
                     self.state_mapper.process_game_state(self.current_state),
                     0.0, True, False, {"timeout": True}
@@ -310,6 +320,7 @@ class BalatroEnv(gym.Env):
             current_state=self.current_state,
             prev_state=self.prev_state if self.prev_state else {}
         )
+        self._episode_accumulated_reward += reward
         terminated = False
         truncated = False
 
@@ -321,6 +332,7 @@ class BalatroEnv(gym.Env):
             "chips": game_state.get('chips', 0),
             "blind_chips": game_state.get('blind_chips', 0),
             "blind_cleared": game_state.get('blind_cleared', 0) == 1,
+            "blind_is_boss": game_state.get('blind_is_boss', 0) == 1,
             "hand_type": game_state.get('current_hand', {}).get('last_handname', 'None'),
             "hand_score": game_state.get('current_hand', {}).get('last_score', 0),
             "jokers": game_state.get('jokers', []),
@@ -364,8 +376,6 @@ class BalatroEnv(gym.Env):
         # Safe fallback: allow all actions
         return np.ones(sum(self.action_space.nvec), dtype=bool)
     
-    PACK_STATE_IDS = {9, 10, 15, 17, 18, 999}  # 999 = SMODS_BOOSTER_OPENED (Steamodded)
-
     def _create_action_mask(self, available_actions, current_game_state):
         """Create action mask for MultiDiscrete space."""
         action_masks = []
@@ -377,11 +387,11 @@ class BalatroEnv(gym.Env):
             1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5,
             7: 6, 8: 7, 9: 8, 10: 9, 11: 10,
             12: 11, 13: 12, 14: 13, 15: 14, 16: 15,
-            17: 16,
+            17: 16, 18: 17, 19: 18,
         }
 
         action_selection_mask = [False] * self.MAX_ACTIONS
-        if state_id == 8:  # ROUND_EVAL — force CASH_OUT (ai index 10)
+        if state_id == ROUND_EVAL_STATE_ID:  # ROUND_EVAL — force CASH_OUT (ai index 10)
             action_selection_mask[10] = True
         else:
             for action_id in available_actions:
@@ -390,7 +400,7 @@ class BalatroEnv(gym.Env):
                     action_selection_mask[ai_idx] = True
         action_masks.append(action_selection_mask)
 
-        if state_id == 8:
+        if state_id == ROUND_EVAL_STATE_ID:
             # ROUND_EVAL: block all param slots
             for _ in range(self.MAX_CARDS):
                 action_masks.append([True, False])
@@ -399,7 +409,7 @@ class BalatroEnv(gym.Env):
             action_masks.append([False] * self.MAX_CONSUMABLE_SLOTS)
             action_masks.append([False] * self.MAX_PACK_SLOTS)
 
-        elif state_id in self.PACK_STATE_IDS:
+        elif state_id in PACK_STATE_IDS:
             # Tarot/spectral packs let the agent highlight hand cards as consumable targets
             can_select_hand = state_id in {9, 15}  # TAROT_PACK=9, SPECTRAL_PACK=15 (vanilla)
             if state_id == 999:  # SMODS_BOOSTER_OPENED: detect type from pack card set
@@ -417,7 +427,7 @@ class BalatroEnv(gym.Env):
                 pack_mask[i] = True
             action_masks.append(pack_mask)
 
-        elif state_id == 5:
+        elif state_id == SHOP_STATE_ID:
             # SHOP: disable card selection, enable shop/joker/booster slots
             for _ in range(self.MAX_CARDS):
                 action_masks.append([True, False])
@@ -425,6 +435,7 @@ class BalatroEnv(gym.Env):
             shop_items = inner_state.get('shop', {}).get('items', [])
             joker_items = [it for it in shop_items if it.get('type') == 'joker']
             booster_items = [it for it in shop_items if it.get('type') == 'booster']
+            consumable_shop_items = [it for it in shop_items if it.get('type') == 'consumable']
 
             shop_mask = [False] * self.MAX_SHOP_SLOTS
             # BUY_JOKER uses shop_slot for joker area slots
@@ -435,6 +446,10 @@ class BalatroEnv(gym.Env):
             for i, item in enumerate(booster_items):
                 if i < self.MAX_SHOP_SLOTS and item.get('cost', 999) <= money:
                     shop_mask[i] = True
+            # BUY_AND_USE_CONSUMABLE reuses shop_slot for consumable items in shop_jokers
+            for i, item in enumerate(consumable_shop_items):
+                if i < self.MAX_SHOP_SLOTS and item.get('cost', 999) <= money:
+                    shop_mask[i] = True
             action_masks.append(shop_mask)
 
             owned_jokers = inner_state.get('jokers', [])
@@ -443,10 +458,16 @@ class BalatroEnv(gym.Env):
                 joker_mask[i] = True
             action_masks.append(joker_mask)
 
-            action_masks.append([False] * self.MAX_CONSUMABLE_SLOTS)
+            # SELL_CONSUMABLE uses consumable_slot; enable slots with owned consumables
+            owned_consumables = inner_state.get('consumables', [])
+            consumable_mask = [False] * self.MAX_CONSUMABLE_SLOTS
+            if 19 in available_actions:
+                for i in range(min(len(owned_consumables), self.MAX_CONSUMABLE_SLOTS)):
+                    consumable_mask[i] = True
+            action_masks.append(consumable_mask)
             action_masks.append([False] * self.MAX_PACK_SLOTS)
 
-        elif state_id == 7:  # BLIND_SELECT
+        elif state_id == BLIND_SELECT_STATE_ID:  # BLIND_SELECT
             for _ in range(self.MAX_CARDS):
                 action_masks.append([True, False])
             action_masks.append([False] * self.MAX_SHOP_SLOTS)

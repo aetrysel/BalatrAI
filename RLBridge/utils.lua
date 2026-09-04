@@ -159,7 +159,7 @@ function UTIL.is_game_ready_for_action()
     if G.SETTINGS and G.SETTINGS.paused then
         return false
     end
-    
+
     -- Check if there are blocking events in the queue
     if G.E_MANAGER and G.E_MANAGER.queues then
         for queue_name, queue in pairs(G.E_MANAGER.queues) do
@@ -170,12 +170,28 @@ function UTIL.is_game_ready_for_action()
             end
         end
     end
-    
+
     -- Check if state transition is complete
     if G.STATE_COMPLETE == false then
         return false
     end
-    
+
+    return true
+end
+
+--- Check if ALL events in the queue are complete (including non-blocking)
+--- Used in pack states where non-blocking animation events hold card object references
+--- that become nil after Handy removes animations, causing crashes if actions fire early
+--- @return boolean True if all events are complete or queue is empty
+function UTIL.is_event_queue_empty()
+    if not G.E_MANAGER or not G.E_MANAGER.queues then return true end
+    for _, queue in pairs(G.E_MANAGER.queues) do
+        for _, event in ipairs(queue) do
+            if not event.complete then
+                return false
+            end
+        end
+    end
     return true
 end
 
