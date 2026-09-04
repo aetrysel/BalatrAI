@@ -365,6 +365,16 @@ function I.select_pack_card(slot)
     if not card then
         return { success = false, error = "No pack card in slot: " .. tostring(slot) }
     end
+    -- Some spectrals (Deja Vu, Trance, Medium, Talisman, Aura, Cryptid, etc.) require highlighted
+    -- hand cards. use_consumeable captures G.hand.highlighted[1] synchronously; if nil, the
+    -- deferred set_seal event crashes outside our pcall.
+    local min_cards = card.ability and card.ability.min_cards or 0
+    if min_cards > 0 then
+        local highlighted = G.hand and G.hand.highlighted or {}
+        if #highlighted < min_cards then
+            return { success = false, error = "Card requires " .. min_cards .. " highlighted hand card(s); currently " .. #highlighted }
+        end
+    end
     local ok, err = pcall(function()
         G.FUNCS.use_card({ config = { ref_table = card } })
     end)
