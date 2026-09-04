@@ -1,8 +1,7 @@
 """
 History logger — writes a human-readable record of the bot's actions and their effects.
-One log file per training session, stored in game_history_logs/.
-Episode content is buffered in memory and flushed at episode end so the cleared-blinds
-TOC at the top of each episode block can be written accurately.
+One log file per training session (new file on each restart), stored in game_history_logs/.
+Steps are written in real-time; cleared-blinds TOC and money events appear at episode end.
 """
 
 import os
@@ -139,12 +138,10 @@ class HistoryLogger:
         else:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             log_path = os.path.join(log_dir, f"history_{ts}.log")
-        self._file = open(log_path, 'a', buffering=1)
+        self._file = open(log_path, 'w', buffering=1)
         self.episode = 0
         self._file_line_count = 0
 
-        # Per-episode buffer (flushed atomically at episode end)
-        self._ep_buffer: list[str] = []
         self._cleared_blinds: list[dict] = []
         self._shop_count: int = 0
         self._money_log: list[str] = []
@@ -163,12 +160,8 @@ class HistoryLogger:
         self._file.write(line + '\n')
         self._file_line_count += 1
 
-    def _ep_write(self, line: str) -> None:
-        self._ep_buffer.append(line)
-
     def new_episode(self, episode_num: int, deck: str = "Unknown", seed: str = "", stake: str = "White") -> None:
         self.episode = episode_num
-        self._ep_buffer = []
         self._cleared_blinds = []
         self._shop_count = 0
         self._money_log = []
@@ -177,6 +170,12 @@ class HistoryLogger:
         self._ep_stake = stake
         self._ep_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._last_logged_state = -1
+
+        self._write("")
+        self._write("─" * 70)
+        self._write(f"EPISODE {episode_num} | {self._ep_ts}")
+        self._write("─" * 70)
+        self._write(f"  Deck: {deck}  |  Seed: {seed}  |  Stake: {stake}")
 
     def _get_section_title(self, state_id: int, prev_gs: dict) -> str:
         if state_id == 7:
@@ -216,9 +215,9 @@ class HistoryLogger:
         # Section header on state change
         curr_state = prev_gs.get('state', 0)
         if curr_state != self._last_logged_state:
-            if self._ep_buffer:
-                self._ep_write("")
-            self._ep_write(self._get_section_title(curr_state, prev_gs))
+            if self._last_logged_state != -1:
+                self._write("")
+            self._write(self._get_section_title(curr_state, prev_gs))
             self._last_logged_state = curr_state
 
         action_id = action_data.get('action', 0)
@@ -239,7 +238,7 @@ class HistoryLogger:
                 line += f" {effect_str}"
             else:
                 line += f"  →  {effect_str}"
-        self._ep_write(line)
+        self._write(line)
 
         # Money event tracking
         prev_gold = prev_gs.get('gold', 0)
@@ -458,23 +457,17 @@ class HistoryLogger:
         round_count = gs.get('round_count', 0)
         deck = gs.get('deck_name', 'Unknown')
 
-        self._ep_write(f"\n{'=' * 70}")
-        self._ep_write(f"  WIN! Episode {episode_num}  |  {ts}")
-        self._ep_write(f"  Ante: {ante}  |  Chips: {chips}  |  Gold: ${gold}  |  Rounds: {round_count}")
-        self._ep_write(f"  Deck: {deck}")
-        self._ep_write(f"  Jokers: [{', '.join(joker_names) if joker_names else 'None'}]")
-        self._ep_write(f"{'=' * 70}")
+        self._write(f"\n{'=' * 70}")
+        self._write(f"  WIN! Episode {episode_num}  |  {ts}")
+        self._write(f"  Ante: {ante}  |  Chips: {chips}  |  Gold: ${gold}  |  Rounds: {round_count}")
+        self._write(f"  Deck: {deck}")
+        self._write(f"  Jokers: [{', '.join(joker_names) if joker_names else 'None'}]")
+        self._write(f"{'=' * 70}")
 
     def log_episode_end(self, total_reward: float, reward_breakdown: list[str]) -> None:
-        # Episode header (reward shown here for quick scanning)
-        self._write("")
-        self._write("─" * 70)
-        self._write(f"EPISODE {self.episode} | {self._ep_ts} | Reward: {total_reward:.1f}")
-        self._write("─" * 70)
-        self._write(f"  Deck: {self._ep_deck}  |  Seed: {self._ep_seed}  |  Stake: {self._ep_stake}  |  Shops: {self._shop_count}")
-
-        # Cleared blinds TOC
+        # Cleared blinds TOC (written at end since steps are real-time)
         if self._cleared_blinds:
+            self._write("")
             self._write("  CLEARED BLINDS:")
             for cb in self._cleared_blinds:
                 boss_tag = " [BOSS]" if cb['is_boss'] else ""
@@ -483,11 +476,6 @@ class HistoryLogger:
                     f"{cb['chips']}/{cb['blind_chips']} chips  "
                     f"Round {cb['round_num']}"
                 )
-            self._write("")
-
-        # Episode body
-        for line in self._ep_buffer:
-            self._write(line)
 
         # Money events summary
         if self._money_log:
@@ -498,7 +486,7 @@ class HistoryLogger:
 
         # Reward summary
         self._write("")
-        self._write(f"  EPISODE REWARD: {total_reward:.2f}")
+        self._write(f"  EPISODE REWARD: {total_reward:.2f}  |  Shops: {self._shop_count}")
         if reward_breakdown:
             self._write("  REWARD BREAKDOWN:")
             for entry in reward_breakdown:
