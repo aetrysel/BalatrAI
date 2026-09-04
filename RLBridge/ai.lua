@@ -22,7 +22,6 @@ local blind_force_timer = 0
 local win_screen_shown = false
 
 local SHOP_DEBUG = false -- Set to true to enable shop state debug logging
-local post_pack_cooldown = 0 -- frames to wait after a pack action before allowing the next
 
 local function is_pack_state(state)
     return state == G.STATES.TAROT_PACK
@@ -58,14 +57,6 @@ end
 --- Monitors game state changes, handles communication, and executes AI actions
 --- @return nil
 function AI.update()
-    -- After a pack action executes, wait several frames before allowing the next action.
-    -- This lets non-blocking animation events (which hold card object references) drain before
-    -- we act again, preventing conv_card nil crashes when Handy removes animations.
-    if post_pack_cooldown > 0 then
-        post_pack_cooldown = post_pack_cooldown - 1
-        return
-    end
-
     if win_screen_active then
         win_screen_timer = win_screen_timer + (G.FPS_CAP and (1/G.FPS_CAP) or 0.016)
         if win_screen_timer > 30.0 then
@@ -189,9 +180,6 @@ function AI.update()
                 utils.log_ai("Action executed successfully: " .. pending_action.action)
                 retry_count = 0
                 pending_action = nil
-                if is_pack_state(G.STATE) then
-                    post_pack_cooldown = 5
-                end
                 utils.log_ai("\n\n\n")
             else
                 utils.log_ai("Action failed: " .. (result.error or "Unknown error"))
