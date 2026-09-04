@@ -153,6 +153,32 @@ def select_debug_mode() -> bool:
     return choice == "y"
 
 
+def get_latest_tb_log_name(tb_dir: Path) -> str:
+    """Return the base name of the most recently modified TensorBoard log subdir."""
+    if not tb_dir.exists():
+        return "MaskablePPO"
+    subdirs = [d for d in tb_dir.iterdir() if d.is_dir()]
+    if not subdirs:
+        return "MaskablePPO"
+    latest = max(subdirs, key=lambda d: d.stat().st_mtime)
+    # Strip trailing _N suffix added by SB3 (e.g. "my-run_3" → "my-run")
+    name = latest.name
+    parts = name.rsplit("_", 1)
+    if len(parts) == 2 and parts[1].isdigit():
+        return parts[0]
+    return name
+
+
+def select_tb_log_name(tb_dir: Path) -> str:
+    """Prompt user to optionally name this TensorBoard session. Returns tb_log_name string."""
+    default = get_latest_tb_log_name(tb_dir)
+    choice = input(f"Would you like to create a unique name for this training session? (y/N, default: '{default}'): ").strip().lower()
+    if choice == "y":
+        name = input("  Session name: ").strip()
+        return name if name else default
+    return default
+
+
 def write_run_config(seed: str | None, deck: str) -> None:
     """Write seed and deck to a config file that the Lua mod reads for auto-skip START_RUN."""
     config = {"seed": seed, "deck": deck}
@@ -246,9 +272,9 @@ def mask_fn(env):
     return env.action_masks()
 
 
-def create_environment(seed=None, deck="Red Deck", is_endless=False, run_label: str = ""):
+def create_environment(seed=None, deck="Red Deck", is_endless=False, run_label: str = "", run_dir: str = ""):
     """Create and wrap the Balatro environment"""
-    env = BalatroEnv(seed=seed, deck=deck, is_endless=is_endless, run_label=run_label)
+    env = BalatroEnv(seed=seed, deck=deck, is_endless=is_endless, run_label=run_label, run_dir=run_dir)
     env = ActionMasker(env, mask_fn)
     env = Monitor(env, filename="training_monitor.csv")
     return env
@@ -302,7 +328,7 @@ def create_callbacks(save_freq=1000, checkpoint_dir="./models/"):
     return callbacks
 
 
-def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resume_from=None, checkpoint_dir="./models/", seed=None, deck="Red Deck", is_endless=False, run_label: str = "", n_steps: int = 4096):
+def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resume_from=None, checkpoint_dir="./models/", seed=None, deck="Red Deck", is_endless=False, run_label: str = "", n_steps: int = 4096, tb_log_name: str = "MaskablePPO", run_dir: str = ""):
     """
     Main training function
 
@@ -319,7 +345,7 @@ def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resu
     logger.info(f"Training for {total_timesteps} timesteps")
 
     try:
-        env = create_environment(seed=seed, deck=deck, is_endless=is_endless, run_label=run_label)
+        env = create_environment(seed=seed, deck=deck, is_endless=is_endless, run_label=run_label, run_dir=run_dir)
 
         if resume_from and Path(resume_from).exists():
             logger.info(f"Resuming training from: {resume_from}")
@@ -338,7 +364,7 @@ def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resu
             total_timesteps=total_timesteps,
             callback=callbacks,
             progress_bar=True,
-            tb_log_name="claude-money_rewards",
+            tb_log_name=tb_log_name,
         )
 
         training_time = time.time() - start_time
@@ -482,7 +508,14 @@ if __name__ == "__main__":
             Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
             print(f"Starting fresh. Checkpoints → {checkpoint_dir}")
 
-        run_label = Path(checkpoint_dir).name
+        # Session-specific label so each restart gets its own history log file
+        run_dir_parts = Path(checkpoint_dir).name.split("_")
+        run_num_str = run_dir_parts[1] if len(run_dir_parts) >= 2 else "0"
+        session_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_label = f"run_{run_num_str}_{session_ts}"
+
+        tb_log_name = select_tb_log_name(Path("./tensorboard_logs"))
+        print(f"TensorBoard session name: {tb_log_name}")
 
         model = train_agent(
             total_timesteps=training_steps,
@@ -494,6 +527,8 @@ if __name__ == "__main__":
             is_endless=is_endless,
             run_label=run_label,
             n_steps=n_steps,
+            tb_log_name=tb_log_name,
+            run_dir=checkpoint_dir,
         )
 
         if model:

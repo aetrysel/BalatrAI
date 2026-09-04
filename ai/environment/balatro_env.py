@@ -5,12 +5,19 @@ This acts as a translator between Balatro's JSON pipe communication and
 RL libraries that expect gym-style step()/reset() methods.
 """
 
+import shutil
 import numpy as np
 from typing import Dict, Any, Tuple, List, Optional
 import logging
 import os
+from pathlib import Path
 import gymnasium as gym
 from gymnasium import spaces
+
+LOVELY_LOG_PATH = Path(os.environ.get(
+    "BALATRO_LOVELY_LOG",
+    Path.home() / ".local/share/love/Balatro/lovely.log"
+))
 from ..utils.communication import BalatroPipeIO, BalatroSocketIO
 from .reward import BalatroRewardCalculator
 from ..utils.mappers import BalatroStateMapper, BalatroActionMapper
@@ -33,7 +40,7 @@ class BalatroEnv(gym.Env):
     without knowing about the underlying pipe communication system.
     """
     
-    def __init__(self, seed=None, deck="Red Deck", is_endless=False, stake: str = "White", run_label: str = ""):
+    def __init__(self, seed=None, deck="Red Deck", is_endless=False, stake: str = "White", run_label: str = "", run_dir: str = ""):
         super().__init__()
         self.logger = logging.getLogger(__name__)
         self.current_state = None
@@ -63,6 +70,7 @@ class BalatroEnv(gym.Env):
         # History logger
         self.history_logger = HistoryLogger(run_label=run_label)
         self._episode_count = 0
+        self.run_dir = Path(run_dir) if run_dir else None
 
         # Action space constants
         self.MAX_ACTIONS = 19        # actions 0-18 (balatro IDs 1-19)
@@ -130,6 +138,14 @@ class BalatroEnv(gym.Env):
         # Reset reward tracking
         self.reward_calculator.reset()
         self._episode_count += 1
+
+        # Copy lovely.log from the previous episode before it gets overwritten
+        if self._episode_count > 1 and self.run_dir and LOVELY_LOG_PATH.exists():
+            try:
+                dest = self.run_dir / f"lovely_ep{self._episode_count - 1}.log"
+                shutil.copy2(LOVELY_LOG_PATH, dest)
+            except Exception:
+                pass
 
         # Wait for initial request from Balatro (game start)
         initial_request = self.pipe_io.wait_for_request()
