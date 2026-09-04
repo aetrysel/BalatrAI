@@ -365,6 +365,13 @@ function I.select_pack_card(slot)
     if not card then
         return { success = false, error = "No pack card in slot: " .. tostring(slot) }
     end
+    -- Block non-negative jokers when joker slots are full
+    if card.config and card.config.center and card.config.center.set == "Joker" then
+        local is_negative = card.edition and card.edition.negative
+        if not is_negative and G.jokers and #G.jokers.cards >= (G.jokers.config and G.jokers.config.card_limit or 5) then
+            return { success = false, error = "Joker slots full" }
+        end
+    end
     -- Some spectrals (Deja Vu, Trance, Medium, Talisman, Aura, Cryptid, etc.) require highlighted
     -- hand cards. use_consumeable captures G.hand.highlighted[1] synchronously; if nil, the
     -- deferred set_seal event crashes outside our pcall.

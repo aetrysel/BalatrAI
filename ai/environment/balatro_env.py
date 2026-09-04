@@ -420,11 +420,20 @@ class BalatroEnv(gym.Env):
             action_masks.append([False] * self.MAX_SHOP_SLOTS)
             action_masks.append([False] * self.MAX_JOKER_SLOTS)
             action_masks.append([False] * self.MAX_CONSUMABLE_SLOTS)
-            # Pack card slots: enable slots that exist
+            # Pack card slots: enable slots that exist, block jokers if slots are full
             pack_cards = inner_state.get('pack_cards', [])
+            jokers = inner_state.get('jokers', [])
+            joker_slots_max = inner_state.get('joker_slots_max', 5)
+            jokers_full = len(jokers) >= joker_slots_max
             pack_mask = [False] * self.MAX_PACK_SLOTS
             for i in range(min(len(pack_cards), self.MAX_PACK_SLOTS)):
-                pack_mask[i] = True
+                card = pack_cards[i]
+                is_joker = card.get('item_set') == 'Joker'
+                is_negative = card.get('edition') == 'negative'
+                if is_joker and not is_negative and jokers_full:
+                    pack_mask[i] = False
+                else:
+                    pack_mask[i] = True
             action_masks.append(pack_mask)
 
         elif state_id == SHOP_STATE_ID:

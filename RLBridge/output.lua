@@ -45,6 +45,7 @@ function O.get_game_state()
         reroll_cost = G.GAME and G.GAME.current_round and G.GAME.current_round.reroll_cost or 5,
         deck_name = G.GAME and G.GAME.selected_back and G.GAME.selected_back.name or "Red",
         jokers = O.get_jokers(),
+        joker_slots_max = G.jokers and G.jokers.config and G.jokers.config.card_limit or 5,
         consumables = O.get_consumables(),
         pack_cards = O.get_pack_cards(),
         pack_choices = G.GAME and G.GAME.pack_choices or 0,
@@ -176,7 +177,8 @@ function O.get_pack_cards()
             table.insert(pack_cards, {
                 name = name,
                 item_set = item_set,
-                slot = i
+                slot = i,
+                edition = get_edition_str(card),
             })
         end
     end
