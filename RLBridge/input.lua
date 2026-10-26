@@ -170,6 +170,10 @@ function I.select_hand(card_indices, boss_name)
         end
     end
 
+    -- Replace any previous selection so the highlight matches card_indices exactly
+    -- (keeps a card forced by Cerulean Bell; clicking that card is a no-op)
+    G.hand:unhighlight_all()
+
     -- Click the cards
     for i = 1, #card_indices do
         G.hand.cards[card_indices[i]]:click()
@@ -208,8 +212,11 @@ function I.buy_shop_joker_slot(slot)
     if not card then
         return { success = false, error = "No card in slot: " .. tostring(slot) }
     end
-    if G.GAME.dollars < card.cost then
+    if not utils.is_button_enabled('can_buy', card) then
         return { success = false, error = "Cannot afford card, cost: " .. tostring(card.cost) }
+    end
+    if not utils.has_buy_space(card) then
+        return { success = false, error = "No room for " .. tostring(card.ability and card.ability.name) }
     end
     G.FUNCS.buy_from_shop({ config = { ref_table = card } })
     utils.log_input("buy_shop_joker_slot " .. tostring(slot) .. " " .. utils.completed_success_msg)
@@ -225,7 +232,7 @@ function I.buy_voucher()
     if not card then
         return { success = false, error = "No voucher card found" }
     end
-    if G.GAME.dollars < (card.cost or 10) then
+    if not utils.is_button_enabled('can_redeem', card) then
         return { success = false, error = "Cannot afford voucher, cost: " .. tostring(card.cost) }
     end
     local ok, err = pcall(function()
@@ -254,7 +261,7 @@ function I.buy_booster(slot)
     if not card then
         return { success = false, error = "No booster in slot: " .. tostring(slot) }
     end
-    if G.GAME.dollars < (card.cost or 4) then
+    if not utils.is_button_enabled('can_open', card) then
         return { success = false, error = "Cannot afford booster, cost: " .. tostring(card.cost) }
     end
     local ok, err = pcall(function()
@@ -286,8 +293,10 @@ function I.buy_and_use_shop_item(slot)
     if not (card.ability and card.ability.consumeable) then
         return { success = false, error = "Not a consumable in slot: " .. tostring(slot) }
     end
-    if G.GAME.dollars < (card.cost or 3) then
-        return { success = false, error = "Cannot afford, cost: " .. tostring(card.cost) }
+    -- Mirror the game's Buy & Use button: affordable (incl. Credit Card debt), and cards that
+    -- target hand cards (e.g. Deja Vu) can't be used from the shop
+    if not utils.is_button_enabled('can_buy_and_use', card) then
+        return { success = false, error = "Buy and use not allowed for " .. tostring(card.ability.name) .. " right now" }
     end
     local ok, err = pcall(function()
         G.FUNCS.buy_from_shop({ config = { ref_table = card, id = 'buy_and_use' } })
@@ -315,7 +324,11 @@ function I.sell_consumable(slot)
     if not card then
         return { success = false, error = "No consumable in slot: " .. tostring(slot) }
     end
-    card:sell_card()
+    if not utils.is_button_enabled('can_sell_card', card) then
+        return { success = false, error = "Consumable cannot be sold right now: " .. tostring(card.ability and card.ability.name) }
+    end
+    -- Game's Sell button handler: also fires the selling_card context for jokers
+    G.FUNCS.sell_card({ config = { ref_table = card } })
     utils.log_input("sell_consumable slot " .. tostring(slot) .. " " .. utils.completed_success_msg)
     return { success = true }
 end
@@ -375,12 +388,11 @@ function I.select_pack_card(slot)
     -- Some spectrals (Deja Vu, Trance, Medium, Talisman, Aura, Cryptid, etc.) require highlighted
     -- hand cards. use_consumeable captures G.hand.highlighted[1] synchronously; if nil, the
     -- deferred set_seal event crashes outside our pcall.
-    local min_cards = card.ability and card.ability.min_cards or 0
-    if min_cards > 0 then
+    -- Mirror the pack's USE / SELECT button, which enforces the exact highlighted-card count
+    if not utils.can_take_pack_card(card) then
         local highlighted = G.hand and G.hand.highlighted or {}
-        if #highlighted < min_cards then
-            return { success = false, error = "Card requires " .. min_cards .. " highlighted hand card(s); currently " .. #highlighted }
-        end
+        return { success = false, error = "Pack card " .. tostring(card.ability and card.ability.name)
+            .. " cannot be taken with " .. #highlighted .. " highlighted hand card(s)" }
     end
     local ok, err = pcall(function()
         G.FUNCS.use_card({ config = { ref_table = card } })
@@ -424,8 +436,12 @@ function I.sell_joker(slot)
     if not card then
         return {success = false, error = "No joker in slot: " .. tostring(slot) }
     end
+    if not utils.is_button_enabled('can_sell_card', card) then
+        return { success = false, error = "Joker cannot be sold (eternal or busy): " .. tostring(card.ability and card.ability.name) }
+    end
 
-    card:sell_card()
+    -- Game's Sell button handler: also fires the selling_card context for other jokers (e.g. Campfire)
+    G.FUNCS.sell_card({ config = { ref_table = card } })
     utils.log_input("sell_joker slot " .. tostring(slot) .. " " .. utils.completed_success_msg)
     return { success = true}
 end

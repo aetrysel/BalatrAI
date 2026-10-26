@@ -36,6 +36,12 @@ def _card_str(card):
     return f"{value}{suit}"
 
 
+def _shop_jokers_item(shop_items: list, slot):
+    """Item at a raw G.shop_jokers slot (jokers and consumables share that area)."""
+    return next((it for it in shop_items
+                 if it.get('type') in ('joker', 'consumable') and it.get('slot') == slot), None)
+
+
 def _hand_primary_feature(hand_name: str, played_cards: list) -> str:
     """Returns a short description of the primary identifying feature of a played hand."""
     if not played_cards or not hand_name:
@@ -322,8 +328,7 @@ class HistoryLogger:
 
         elif action_id == 7:  # BUY_JOKER
             shop_items = prev_gs.get('shop', {}).get('items', [])
-            joker_items = [it for it in shop_items if it.get('type') == 'joker']
-            item = joker_items[slot - 1] if slot and 0 < slot <= len(joker_items) else None
+            item = _shop_jokers_item(shop_items, slot)
             if item:
                 return f"BUY_JOKER \"{item['name']}\" (slot {slot}, ${item.get('cost', '?')})"
             return f"BUY_JOKER slot:{slot}"
@@ -380,8 +385,7 @@ class HistoryLogger:
 
         elif action_id == 18:  # BUY_AND_USE_CONSUMABLE
             shop_items = prev_gs.get('shop', {}).get('items', [])
-            consumables = [it for it in shop_items if it.get('type') == 'consumable']
-            item = consumables[slot - 1] if slot and 0 < slot <= len(consumables) else None
+            item = _shop_jokers_item(shop_items, slot)
             if item:
                 return f"BUY_AND_USE \"{item['name']}\" (slot {slot}, ${item.get('cost', '?')})"
             return f"BUY_AND_USE slot:{slot}"

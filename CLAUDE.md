@@ -27,18 +27,23 @@ balatro-rl/
 │   └── dkjson.lua      # JSON encode/decode library
 ├── ai/                 # Python RL training code
 │   ├── train_balatro.py         # Entry point; training orchestration
+│   ├── config/
+│   │   └── seeds.json           # Named seeds (persisted between sessions)
 │   ├── environment/
 │   │   ├── balatro_env.py       # Gymnasium environment wrapper
 │   │   └── reward.py            # Reward calculator
 │   └── utils/
 │       ├── communication.py     # Pipe/socket layer (Python side)
-│       ├── mappers.py           # Game state → observation vector
+│       ├── constants.py         # Game state ID constants (SELECTING_HAND_STATE_ID etc.)
+│       ├── mappers.py           # Game state → observation vector (BalatroStateMapper)
 │       ├── callbacks.py         # SB3 training callbacks, TensorBoard metrics
 │       ├── validation.py        # JSON schema validators
 │       ├── replay.py            # Saves top-10 winning episodes
+│       ├── history_logger.py    # Human-readable per-session action/event log
 │       └── debug.py             # Timestamped print helpers
 ├── balatro-source-code/ # Decompiled Balatro source — reference only, do not edit
 ├── models/             # Saved model checkpoints (run_N_YYYYMMDD_HHMMSS/)
+├── game_history_logs/  # Per-session human-readable logs from history_logger
 └── tensorboard_logs/   # TensorBoard event files
 ```
 

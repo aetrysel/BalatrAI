@@ -434,12 +434,14 @@ class BalatroEnv(gym.Env):
             if state_id == 999:  # SMODS_BOOSTER_OPENED: detect type from pack card set
                 pack_cards = inner_state.get('pack_cards', [])
                 can_select_hand = bool(pack_cards) and pack_cards[0].get('item_set') in {'Tarot', 'Spectral'}
+            can_select_hand = can_select_hand and 1 in available_actions
             for _ in range(self.MAX_CARDS):
                 action_masks.append([True, True] if can_select_hand else [True, False])
             action_masks.append([False] * self.MAX_SHOP_SLOTS)
-            action_masks.append([False] * self.MAX_JOKER_SLOTS)
-            action_masks.append([False] * self.MAX_CONSUMABLE_SLOTS)
-            # Pack card slots: enable slots that exist, block jokers if slots are full
+            action_masks.append(self._joker_slot_mask(inner_state, available_actions))
+            action_masks.append(self._consumable_slot_mask(inner_state, available_actions))
+            # Pack card slots: enable slots that exist, block jokers if slots are full,
+            # and anything the pack's USE/SELECT button would reject (e.g. Medium without exactly 1 highlighted card)
             pack_cards = inner_state.get('pack_cards', [])
             jokers = inner_state.get('jokers', [])
             joker_slots_max = inner_state.get('joker_slots_max', 5)
@@ -452,7 +454,7 @@ class BalatroEnv(gym.Env):
                 if is_joker and not is_negative and jokers_full:
                     pack_mask[i] = False
                 else:
-                    pack_mask[i] = True
+                    pack_mask[i] = bool(card.get('usable', True))
             action_masks.append(pack_mask)
 
         elif state_id == SHOP_STATE_ID:
@@ -461,66 +463,74 @@ class BalatroEnv(gym.Env):
                 action_masks.append([True, False])
 
             shop_items = inner_state.get('shop', {}).get('items', [])
-            joker_items = [it for it in shop_items if it.get('type') == 'joker']
+            # Jokers and consumables share G.shop_jokers; Lua indexes them by their raw slot there
+            shop_jokers_items = [it for it in shop_items if it.get('type') in ('joker', 'consumable')]
             booster_items = [it for it in shop_items if it.get('type') == 'booster']
             consumable_shop_items = [it for it in shop_items if it.get('type') == 'consumable']
 
             shop_mask = [False] * self.MAX_SHOP_SLOTS
             # BUY_JOKER uses shop_slot for joker area slots
-            for i, item in enumerate(joker_items):
-                if i < self.MAX_SHOP_SLOTS and item.get('cost', 999) <= money:
+            for item in shop_jokers_items:
+                i = item.get('slot', 0) - 1
+                if 0 <= i < self.MAX_SHOP_SLOTS and item.get('can_buy', item.get('cost', 999) <= money):
                     shop_mask[i] = True
             # BUY_BOOSTER reuses shop_slot for booster area slots
             for i, item in enumerate(booster_items):
-                if i < self.MAX_SHOP_SLOTS and item.get('cost', 999) <= money:
+                if i < self.MAX_SHOP_SLOTS and item.get('can_buy', item.get('cost', 999) <= money):
                     shop_mask[i] = True
             # BUY_AND_USE_CONSUMABLE reuses shop_slot for consumable items in shop_jokers
-            for i, item in enumerate(consumable_shop_items):
-                if i < self.MAX_SHOP_SLOTS and item.get('cost', 999) <= money:
+            for item in consumable_shop_items:
+                i = item.get('slot', 0) - 1
+                if 0 <= i < self.MAX_SHOP_SLOTS and item.get('can_buy_and_use', item.get('cost', 999) <= money):
                     shop_mask[i] = True
             action_masks.append(shop_mask)
 
-            owned_jokers = inner_state.get('jokers', [])
-            joker_mask = [False] * self.MAX_JOKER_SLOTS
-            for i in range(min(len(owned_jokers), self.MAX_JOKER_SLOTS)):
-                joker_mask[i] = True
-            action_masks.append(joker_mask)
+            action_masks.append(self._joker_slot_mask(inner_state, available_actions))
 
             # SELL_CONSUMABLE uses consumable_slot; enable slots with owned consumables
-            owned_consumables = inner_state.get('consumables', [])
-            consumable_mask = [False] * self.MAX_CONSUMABLE_SLOTS
-            if 19 in available_actions:
-                for i in range(min(len(owned_consumables), self.MAX_CONSUMABLE_SLOTS)):
-                    consumable_mask[i] = True
-            action_masks.append(consumable_mask)
+            action_masks.append(self._consumable_slot_mask(inner_state, available_actions))
             action_masks.append([False] * self.MAX_PACK_SLOTS)
 
         elif state_id == BLIND_SELECT_STATE_ID:  # BLIND_SELECT
             for _ in range(self.MAX_CARDS):
                 action_masks.append([True, False])
             action_masks.append([False] * self.MAX_SHOP_SLOTS)
-            action_masks.append([False] * self.MAX_JOKER_SLOTS)
-            action_masks.append([False] * self.MAX_CONSUMABLE_SLOTS)
+            action_masks.append(self._joker_slot_mask(inner_state, available_actions))
+            action_masks.append(self._consumable_slot_mask(inner_state, available_actions))
             action_masks.append([False] * self.MAX_PACK_SLOTS)
 
         else:
             # SELECTING_HAND and other states
-            can_select = not any(a in [2, 3] for a in available_actions)
+            # Card selectors follow SELECT_HAND availability (works with Cerulean Bell's forced card)
+            can_select = 1 in available_actions
             for _ in range(self.MAX_CARDS):
                 action_masks.append([True, True] if can_select else [True, False])
             action_masks.append([False] * self.MAX_SHOP_SLOTS)
-            action_masks.append([False] * self.MAX_JOKER_SLOTS)
+            action_masks.append(self._joker_slot_mask(inner_state, available_actions))
 
-            consumables = inner_state.get('consumables', [])
-            consumable_mask = [False] * self.MAX_CONSUMABLE_SLOTS
-            if 14 in available_actions:  # USE_CONSUMABLE available
-                for i in range(min(len(consumables), self.MAX_CONSUMABLE_SLOTS)):
-                    consumable_mask[i] = True
-            action_masks.append(consumable_mask)
+            action_masks.append(self._consumable_slot_mask(inner_state, available_actions))
             action_masks.append([False] * self.MAX_PACK_SLOTS)
 
         flat = [item for sublist in action_masks for item in sublist]
         return flat
+
+    def _joker_slot_mask(self, inner_state, available_actions):
+        """SELL_JOKER (8) uses joker_slot: enable owned jokers the game would let you sell (not eternal)."""
+        mask = [False] * self.MAX_JOKER_SLOTS
+        if 8 in available_actions:
+            for i, joker in enumerate(inner_state.get('jokers', [])[:self.MAX_JOKER_SLOTS]):
+                mask[i] = bool(joker.get('can_sell', True))
+        return mask
+
+    def _consumable_slot_mask(self, inner_state, available_actions):
+        """USE_CONSUMABLE (14) and SELL_CONSUMABLE (19) share consumable_slot: enable a slot either action can act on."""
+        mask = [False] * self.MAX_CONSUMABLE_SLOTS
+        can_use_any = 14 in available_actions
+        can_sell_any = 19 in available_actions
+        for i, consumable in enumerate(inner_state.get('consumables', [])[:self.MAX_CONSUMABLE_SLOTS]):
+            mask[i] = bool((can_use_any and consumable.get('can_use', True))
+                           or (can_sell_any and consumable.get('can_sell', True)))
+        return mask
 
 
     @staticmethod

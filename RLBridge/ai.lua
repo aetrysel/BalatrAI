@@ -180,6 +180,9 @@ function AI.update()
                 utils.log_ai("Action executed successfully: " .. pending_action.action)
                 retry_count = 0
                 pending_action = nil
+                -- Re-request even if the action left the observed state unchanged
+                -- (e.g. re-selecting the same hand cards inside a pack)
+                last_combined_hash = nil
                 utils.log_ai("\n\n\n")
             else
                 utils.log_ai("Action failed: " .. (result.error or "Unknown error"))

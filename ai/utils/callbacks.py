@@ -132,9 +132,13 @@ class BalatroMetricsCallback(BaseCallback):
                 else:
                     self.total_consumables_failed += 1
                     self.episode_consumables_failed += 1
-            elif action_taken == 18:  # BUY_AND_USE_CONSUMABLE: always counts as used
-                self.total_consumables_used += 1
-                self.episode_consumables_used += 1
+            elif action_taken == 18:  # BUY_AND_USE_CONSUMABLE: used if money was spent
+                if info.get("gold", 0) < self._prev_gold:
+                    self.total_consumables_used += 1
+                    self.episode_consumables_used += 1
+                else:
+                    self.total_consumables_failed += 1
+                    self.episode_consumables_failed += 1
             elif action_taken == 19:  # SELL_CONSUMABLE
                 self.total_consumables_sold += 1
                 self.episode_consumables_sold += 1

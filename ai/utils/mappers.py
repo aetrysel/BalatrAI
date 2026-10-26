@@ -420,6 +420,8 @@ class BalatroActionMapper:
         if balatro_action_id in (14, 19):  # USE_CONSUMABLE, SELL_CONSUMABLE
             consumable_slot = raw_action[self.slices["consumable_slot"]].tolist()[0]
             return [consumable_slot + 1]
+        if balatro_action_id == 8:  # SELL_JOKER
+            return [raw_action[self.slices["joker_slot"]].tolist()[0] + 1]
         card_indices = raw_action[self.slices["card_indices"]]
         return [i + 1 for i, val in enumerate(card_indices) if val == 1]
 
@@ -441,4 +443,9 @@ class BalatroActionMapper:
             return [rl_action[self.slices["pack_card_slot"]].tolist()[0] + 1]
         elif balatro_action_id in (14, 19):  # USE_CONSUMABLE, SELL_CONSUMABLE
             return [rl_action[self.slices["consumable_slot"]].tolist()[0] + 1]
+        elif balatro_action_id == 8:  # SELL_JOKER
+            return [rl_action[self.slices["joker_slot"]].tolist()[0] + 1]
+        elif balatro_action_id == 1:  # SELECT_HAND: target hand cards for a tarot/spectral
+            card_indices = rl_action[self.slices["card_indices"]]
+            return [i + 1 for i, val in enumerate(card_indices) if val == 1]
         return []

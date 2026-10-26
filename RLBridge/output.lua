@@ -2,6 +2,7 @@
 --- Extracts and formats game state data for AI consumption
 
 local O = {}
+local utils = require("utils")
 
 local last_hand_info = { handname = "None", score = 0 }
 
@@ -157,7 +158,8 @@ function O.get_jokers()
                 name = card.config.center.name or "Unknown",
                 sell_cost = card.sell_cost or 1,
                 slot = i,
-                edition = get_edition_str(card)
+                edition = get_edition_str(card),
+                can_sell = utils.is_button_enabled('can_sell_card', card),
             })
         end
     end
@@ -171,7 +173,9 @@ function O.get_consumables()
             table.insert(consumables, {
                 name = card.config.center.name or "Unknown",
                 item_set = (card.config.center.set or "Unknown"),
-                slot = i
+                slot = i,
+                can_use = utils.is_button_enabled('can_use_consumeable', card),
+                can_sell = utils.is_button_enabled('can_sell_card', card),
             })
         end
     end
@@ -196,6 +200,7 @@ function O.get_pack_cards()
                 item_set = item_set,
                 slot = i,
                 edition = get_edition_str(card),
+                usable = utils.can_take_pack_card(card),
             })
         end
     end
@@ -229,7 +234,10 @@ function O.get_shop_items()
                 cost = card.cost or 999,
                 type = is_consumable and "consumable" or "joker",
                 item_set = card.config.center.set or "Joker",
-                slot = i
+                slot = i,
+                -- Buy button enabled and there is room to keep the card
+                can_buy = utils.is_button_enabled('can_buy', card) and utils.has_buy_space(card),
+                can_buy_and_use = is_consumable and utils.is_button_enabled('can_buy_and_use', card) or false,
             })
         end
     end
@@ -241,7 +249,8 @@ function O.get_shop_items()
                 cost = card.cost or 10,
                 type = "voucher",
                 item_set = "Voucher",
-                slot = i
+                slot = i,
+                can_buy = utils.is_button_enabled('can_redeem', card),
             })
         end
     end
@@ -261,7 +270,8 @@ function O.get_shop_items()
                 item_set = "Booster",
                 slot = i,
                 pack_size = pack_size,
-                pack_choose = pack_choose
+                pack_choose = pack_choose,
+                can_buy = utils.is_button_enabled('can_open', card),
             })
         end
     end

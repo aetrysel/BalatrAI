@@ -250,13 +250,16 @@ class BalatroRewardCalculator:
             # Sell = consumable gone AND gold went up; use = consumable gone AND gold didn't go up
             is_consumable_sell = consumable_decreased and gold_increased
             is_consumable_use = consumable_decreased and not is_consumable_sell
+            # Joker sold (in any state) = joker count dropped AND gold went up
+            joker_decreased = len(inner_game_state.get('jokers', [])) < len(prev_game_state.get('jokers', []))
+            is_joker_sell = joker_decreased and gold_increased
 
             if is_consumable_use:
                 reward += 2.0
                 reward_breakdown.append("use_consumable: +2.00")
 
             # Money earned from non-sell sources: gold cards, joker effects, blind payouts, interest
-            if gold_increased and not is_consumable_sell:
+            if gold_increased and not is_consumable_sell and not is_joker_sell:
                 money_reward = (current_gold - prev_gold) * 0.4
                 reward += money_reward
                 reward_breakdown.append(f"money_earned +{current_gold - prev_gold}: +{money_reward:.2f}")
