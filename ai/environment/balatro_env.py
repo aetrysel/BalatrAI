@@ -242,6 +242,7 @@ class BalatroEnv(gym.Env):
                 "jokers": current_gs.get('jokers', []),
                 "consumable_count": len(current_gs.get('consumables', [])),
                 "gold": current_gs.get('gold', 0),
+                "run_stats": current_gs.get('run_stats', {}),
                 "action_taken": response_data.get('action', 0),
             }
             if not self.is_endless:
@@ -307,6 +308,7 @@ class BalatroEnv(gym.Env):
                 "jokers": last_gs.get('jokers', []),
                 "consumable_count": len(last_gs.get('consumables', [])),
                 "gold": last_gs.get('gold', 0),
+                "run_stats": last_gs.get('run_stats', {}),
                 "action_taken": response_data.get('action', 0),
             }
         while next_request.get('game_state', {}).get('state') == 4:
@@ -354,6 +356,7 @@ class BalatroEnv(gym.Env):
             "jokers": game_state.get('jokers', []),
             "consumable_count": len(game_state.get('consumables', [])),
             "gold": game_state.get('gold', 0),
+            "run_stats": game_state.get('run_stats', {}),
             "action_taken": response_data.get('action', 0),
         }
 
@@ -553,4 +556,5 @@ class BalatroEnv(gym.Env):
             "hand_score": game_state.get('current_hand', {}).get('score', 0),
             "hands_left": game_state.get('round', {}).get('hands_left', 0),
             "discards_left": game_state.get('round', {}).get('discards_left', 0),
+            "run_stats": game_state.get('run_stats', {}),
         }

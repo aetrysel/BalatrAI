@@ -1,6 +1,11 @@
 from stable_baselines3.common.callbacks import BaseCallback
 from collections import defaultdict, deque
 
+# Per-run stats logged as run/episode_*, run/best_*, run/rollout_mean_*
+RUN_STAT_NAMES = [
+    "high_score", "max_gold", "rerolls", "planets_used", "tarots_used",
+    "jokers_purchased", "hands_played", "discards_remaining", "final_deck_size",
+]
 
 class BalatroMetricsCallback(BaseCallback):
     def __init__(self, log_freq=10, verbose=1):
@@ -26,6 +31,7 @@ class BalatroMetricsCallback(BaseCallback):
         self.highest_blind_score = 0
         self.highest_single_hand_score = 0
         self.max_money_ever = 0
+        self.best_run_stats = defaultdict(int)
 
         # All-time hand type tracking
         self.hand_type_counts = defaultdict(int)
@@ -56,6 +62,8 @@ class BalatroMetricsCallback(BaseCallback):
         self.episode_consumables_used = 0
         self.episode_consumables_failed = 0
         self.episode_consumables_sold = 0
+        self.episode_max_gold = 0
+        self.episode_jokers_purchased = 0
 
         # Previous-step deltas
         self._prev_chips = 0
@@ -82,6 +90,7 @@ class BalatroMetricsCallback(BaseCallback):
         self._rollout_consumables_sold = []
         self._rollout_blind_skip_rates = []
         self._rollout_hand_counts = defaultdict(int)
+        self._rollout_run_stats = defaultdict(list)
 
     def _win_pct(self):
         if self.total_episodes == 0:
@@ -139,6 +148,8 @@ class BalatroMetricsCallback(BaseCallback):
                 self.episode_money_spent += self._prev_gold - gold
             if gold > self.max_money_ever:
                 self.max_money_ever = gold
+            if gold > self.episode_max_gold:
+                self.episode_max_gold = gold
             self._prev_gold = gold
 
             # Joker delta tracking
@@ -146,6 +157,8 @@ class BalatroMetricsCallback(BaseCallback):
             joker_delta = curr_joker_count - self._prev_joker_count
             if joker_delta > 0:
                 self.episode_jokers_gained += joker_delta
+                if action_taken == 7:  # BUY_JOKER
+                    self.episode_jokers_purchased += joker_delta
             elif joker_delta < 0:
                 self.episode_jokers_sold += abs(joker_delta)
             self._prev_joker_count = curr_joker_count
@@ -232,6 +245,27 @@ class BalatroMetricsCallback(BaseCallback):
             self._rollout_blind_skip_rates.append(
                 (self.episode_blind_skips / max(1, ep_blind_total)))
 
+            # Per-run stats (game counters from run_stats + Python accumulators)
+            run_stats = info.get("run_stats", {}) or {}
+            ep_stats = {
+                "high_score":         run_stats.get("high_score", 0),
+                "max_gold":           self.episode_max_gold,
+                "rerolls":            run_stats.get("rerolls", 0),
+                "planets_used":       run_stats.get("planets_used", 0),
+                "tarots_used":        run_stats.get("tarots_used", 0),
+                "jokers_purchased":   self.episode_jokers_purchased,
+                "hands_played":       run_stats.get("hands_played", 0),
+                "discards_remaining": run_stats.get("unused_discards", 0),
+                "final_deck_size":    run_stats.get("deck_size", 0),
+            }
+            for name in RUN_STAT_NAMES:
+                value = ep_stats[name]
+                self._rollout_run_stats[name].append(value)
+                if value > self.best_run_stats[name]:
+                    self.best_run_stats[name] = value
+                self.logger.record(f"run/episode_{name}", value)
+                self.logger.record(f"run/best_{name}",    self.best_run_stats[name])
+
             # --- Live TensorBoard (best-ever / all-time / rolling) ---
             hand_types = [
                 "High Card", "Pair", "Two Pair", "Three of a Kind",
@@ -309,6 +343,8 @@ class BalatroMetricsCallback(BaseCallback):
             self.episode_consumables_used = 0
             self.episode_consumables_failed = 0
             self.episode_consumables_sold = 0
+            self.episode_max_gold = 0
+            self.episode_jokers_purchased = 0
 
             needs_dump = True
 
@@ -362,6 +398,11 @@ class BalatroMetricsCallback(BaseCallback):
             self.logger.record("consumables/mean_sold",
                                self._mean(self._rollout_consumables_sold))
 
+            # Per-run stat rollout means
+            for name in RUN_STAT_NAMES:
+                self.logger.record(f"run/rollout_mean_{name}",
+                                   self._mean(self._rollout_run_stats[name]))
+
             # Rollout hand type distribution (one category per hand type)
             rollout_total = sum(self._rollout_hand_counts.values()) or 1
             for ht in hand_types:
@@ -390,6 +431,7 @@ class BalatroMetricsCallback(BaseCallback):
         self._rollout_consumables_sold = []
         self._rollout_blind_skip_rates = []
         self._rollout_hand_counts = defaultdict(int)
+        self._rollout_run_stats = defaultdict(list)
 
         self.logger.dump(self.num_timesteps)
 

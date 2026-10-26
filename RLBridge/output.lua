@@ -52,6 +52,23 @@ function O.get_game_state()
         deck_cards = O.get_deck_cards(),
         auto_endless_config = auto_endless,
         shop = { items = O.get_shop_items() },
+        run_stats = O.get_run_stats(),
+    }
+end
+
+-- Per-run counters the game already tracks (reset on new run)
+function O.get_run_stats()
+    local game = G.GAME
+    local rs = game and game.round_scores
+    local usage = game and game.consumeable_usage_total
+    return {
+        high_score = rs and rs.hand and rs.hand.amt or 0,
+        rerolls = rs and rs.times_rerolled and rs.times_rerolled.amt or 0,
+        planets_used = usage and usage.planet or 0,
+        tarots_used = usage and usage.tarot or 0,
+        hands_played = game and game.hands_played or 0,
+        unused_discards = game and game.unused_discards or 0,
+        deck_size = G.playing_cards and #G.playing_cards or 0,
     }
 end
 
