@@ -242,11 +242,11 @@ class BalatroMetricsCallback(BaseCallback):
             self.logger.record("game/win_rate_overall",
                                self._win_pct())
             self.logger.record("game/win_rate_last_100",
-                               round(sum(self.recent_outcomes) / max(1, len(self.recent_outcomes)), 2))
+                               sum(self.recent_outcomes) / max(1, len(self.recent_outcomes)))
             self.logger.record("game/blind_clear_rate_overall",
-                               round(self.total_blind_clears / max(1, self.total_blind_attempts), 2))
+                               self.total_blind_clears / max(1, self.total_blind_attempts))
             self.logger.record("game/blind_clear_rate_last_100",
-                               round(sum(self.recent_blind_outcomes) / max(1, len(self.recent_blind_outcomes)), 2))
+                               sum(self.recent_blind_outcomes) / max(1, len(self.recent_blind_outcomes)))
             self.logger.record("game/highest_blind_score",      self.highest_blind_score)
             self.logger.record("game/highest_single_hand_score", self.highest_single_hand_score)
             self.logger.record("game/best_ante",                  self.best_ante)
@@ -256,11 +256,11 @@ class BalatroMetricsCallback(BaseCallback):
             self.logger.record("custom/total_blind_clears",       self.total_blind_clears)
             self.logger.record("custom/total_boss_blind_clears",  self.total_boss_blind_clears)
             self.logger.record("game/boss_blind_clear_rate_overall",
-                               round(self.total_boss_blind_clears / max(1, self.total_boss_blind_encounters), 2))
+                               self.total_boss_blind_clears / max(1, self.total_boss_blind_encounters))
             self.logger.record("game/boss_blind_clear_rate_last_100",
-                               round(sum(self.recent_boss_blind_outcomes) / max(1, len(self.recent_boss_blind_outcomes)), 2))
+                               sum(self.recent_boss_blind_outcomes) / max(1, len(self.recent_boss_blind_outcomes)))
             self.logger.record("actions/blind_skip_rate",
-                               round(self.total_blind_skips / max(1, self.total_blind_selections), 2))
+                               self.total_blind_skips / max(1, self.total_blind_selections))
 
             # Consumables (all-time totals + derived rates)
             total_c_attempts = self.total_consumables_used + self.total_consumables_failed
@@ -268,9 +268,9 @@ class BalatroMetricsCallback(BaseCallback):
             self.logger.record("consumables/total_failed",    self.total_consumables_failed)
             self.logger.record("consumables/total_sold",      self.total_consumables_sold)
             self.logger.record("consumables/success_rate",
-                               round(self.total_consumables_used / max(1, total_c_attempts), 3))
+                               self.total_consumables_used / max(1, total_c_attempts))
             self.logger.record("consumables/use_sell_ratio",
-                               round(self.total_consumables_used / max(1, self.total_consumables_sold), 2))
+                               self.total_consumables_used / max(1, self.total_consumables_sold))
 
             # Joker per-episode metrics
             self.logger.record("joker/episode_gained",         self.episode_jokers_gained)
@@ -327,9 +327,9 @@ class BalatroMetricsCallback(BaseCallback):
         if self._rollout_episodes > 0:
             n = self._rollout_episodes
             self.logger.record("game_rollout/win_rate",
-                               round(100.0 * self._rollout_wins / n, 2))
+                               self._rollout_wins / n, 2)
             self.logger.record("game_rollout/blind_clear_rate",
-                               round(self._rollout_blind_clears / max(1, self._rollout_blind_attempts), 2))
+                               self._rollout_blind_clears / max(1, self._rollout_blind_attempts))
             self.logger.record("game_rollout/mean_ante",
                                self._mean(self._rollout_antes))
             self.logger.record("game_rollout/mean_money_earned",
