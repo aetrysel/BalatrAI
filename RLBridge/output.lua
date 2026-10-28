@@ -60,6 +60,7 @@ function O.get_game_state()
         jokers = O.get_jokers(),
         joker_slots_max = G.jokers and G.jokers.config and G.jokers.config.card_limit or 5,
         consumables = O.get_consumables(),
+        consumable_slots_max = G.consumeables and G.consumeables.config and G.consumeables.config.card_limit or 2,
         pack_cards = O.get_pack_cards(),
         pack_choices = G.GAME and G.GAME.pack_choices or 0,
         deck_cards = O.get_deck_cards(),

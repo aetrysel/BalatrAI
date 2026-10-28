@@ -223,18 +223,24 @@ Shape `(414,)` float32 vector built by `ai/utils/mappers.py` (`BalatroStateMappe
 **Note:** `blind_name` is encoded as a vocabulary index (`BLIND_NAMES` list in `mappers.py`). `blind_is_boss` is a binary flag from `G.GAME.blind.boss`. `round_count` maps `G.GAME.round` (not a career stat — it's a per-run counter reset on new run).
 
 ### Reward System (`ai/environment/reward.py`)
-Two components:
+Four components (summed every step):
 
-**Play reward** (SELECTING_HAND):
-- Chip gain: quadratic scaling up to +20
-- Blind clear: +30 × 1.5^(ante-1); one-hand bonuses (+25/+15/+8)
+**Inventory reward** (any state, potential-based so buy→sell nets 0):
+- Φ = 5 × jokers owned + 1.5 × consumables owned; reward = Φ(s') − Φ(s)
+- Selling during SELECTING_HAND: −2 (except a consumable sell when consumable slots are full)
+
+**Play reward** (any state):
+- Chip gain: up to +20
+- Blind clear: +30 × 1.5^(ante-1); one-hand bonuses (+25/+15/+8); +0.5 per joker held
 - Ante progression: +10 × ante; boss blind: +15 × ante
-- Game over: −20
+- Money earned (non-sell sources): +0.4 × gain; consumable use: +2
+- Game over: −15 + up to +8 progress credit
 
-**Shop reward** (SHOP):
-- Joker purchase: +10; joker sell: −1
-- Money earned: +0.5 × gain; joker slot utilization: +0.5/step
-- Leave shop broke with no jokers: −3
+**Shop reward** (tanh-scaled to ±5):
+- Money spent: −0.3 × log1p(spent); buy-and-use consumable: +2; voucher: +8; enter pack: +3
+- Leave shop: +1 × joker slot utilization; −3 if broke with no jokers
+
+**Pack reward**: planet pick +4, tarot/spectral kept +3, buffoon/standard pick +1
 
 Reward clipped to [−25, +500].
 
