@@ -26,6 +26,7 @@ class BalatroRewardCalculator:
         self.current_round_hands = []      # hands played in current blind
         self.rounds_played = []            # completed rounds: [{blind_name, blind_chips, ante, round_num, hands, cleared}]
         self.highest_chips_this_blind = 0  # peak chips seen this blind (for game_over reporting)
+        self.pending_cards_removed = 0     # playing cards removed since last blind clear (paid on clear)
 
         # Game-over reporting
         self.game_over_chips = 0
@@ -237,6 +238,12 @@ class BalatroRewardCalculator:
         # Track peak chips for accurate game-over reporting
         self.highest_chips_this_blind = max(self.highest_chips_this_blind, current_chips)
 
+        # Deck thinning: count playing cards removed (additions ignored)
+        prev_deck_size = (prev_game_state.get('run_stats') or {}).get('deck_size', 0)
+        curr_deck_size = (inner_game_state.get('run_stats') or {}).get('deck_size', 0)
+        if prev_deck_size > 0 and 0 < curr_deck_size < prev_deck_size:
+            self.pending_cards_removed += prev_deck_size - curr_deck_size
+
         # === CONSUMABLE USE / SELL / MONEY EARNED ===
         if prev_state:
             prev_consumable_count = len(prev_game_state.get('consumables', []))
@@ -308,6 +315,14 @@ class BalatroRewardCalculator:
             total_blind_reward = base_reward + efficiency_bonus
             reward += total_blind_reward
             reward_breakdown.append(f"BLIND CLEARED: +{base_reward:.1f} (base) +{efficiency_bonus:.1f} (efficiency)")
+
+            # Deck thinning bonus: +1 per card removed this round
+            if self.pending_cards_removed > 0:
+                deck_bonus = 1.0 * self.pending_cards_removed
+                reward += deck_bonus
+                reward_breakdown.append(f"deck_thinning {self.pending_cards_removed} cards: +{deck_bonus:.1f}")
+                self.pending_cards_removed = 0
+
             self.blind_already_defeated = True
             self.winning_chips = current_chips
             print(f"✅ Blind cleared! Ante {self.current_blind_ante} - {self.current_blind_name} "
@@ -387,6 +402,7 @@ class BalatroRewardCalculator:
         self.current_round_hands = []
         self.rounds_played = []
         self.highest_chips_this_blind = 0
+        self.pending_cards_removed = 0
         self.game_over_chips = 0
         self.game_over_blind_chips = 0
         self.game_over_blind_name = ''

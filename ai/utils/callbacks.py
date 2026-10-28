@@ -3,9 +3,13 @@ from collections import defaultdict, deque
 
 # Per-run stats logged as run/episode_*, run/best_*, run/rollout_mean_*
 RUN_STAT_NAMES = [
-    "high_score", "max_gold", "rerolls", "planets_used", "tarots_used",
+    "high_score", "max_gold", "rerolls",
     "jokers_purchased", "hands_played", "discards_remaining", "final_deck_size",
 ]
+# Consumable type -> run_stats key, logged as consumable_<type>/*
+CONSUMABLE_TYPE_STATS = {"tarot": "tarots_used", "planet": "planets_used", "spectral": "spectrals_used"}
+# Run stats where lower is better, also logged as run/lowest_*
+RUN_STAT_LOWER_IS_BETTER = ["final_deck_size"]
 
 class BalatroMetricsCallback(BaseCallback):
     def __init__(self, log_freq=10, verbose=1):
@@ -24,6 +28,7 @@ class BalatroMetricsCallback(BaseCallback):
         self.total_consumables_sold = 0    # sold: action 19
         self.total_boss_blind_clears = 0
         self.total_boss_blind_encounters = 0  # clears + losses on boss blinds
+        self.total_a1r1_clears = 0  # episodes that cleared ante 1, round 1
 
         # Best-ever metrics
         self.best_ante = 0
@@ -32,6 +37,10 @@ class BalatroMetricsCallback(BaseCallback):
         self.highest_single_hand_score = 0
         self.max_money_ever = 0
         self.best_run_stats = defaultdict(int)
+        self.lowest_run_stats = {}
+
+        # All-time per-consumable use counts, keyed by (type, name)
+        self.consumable_use_counts = defaultdict(int)
 
         # All-time hand type tracking
         self.hand_type_counts = defaultdict(int)
@@ -64,6 +73,7 @@ class BalatroMetricsCallback(BaseCallback):
         self.episode_consumables_sold = 0
         self.episode_max_gold = 0
         self.episode_jokers_purchased = 0
+        self.episode_a1r1_cleared = False
 
         # Previous-step deltas
         self._prev_chips = 0
@@ -76,8 +86,12 @@ class BalatroMetricsCallback(BaseCallback):
         self._rollout_wins = 0
         self._rollout_blind_clears = 0
         self._rollout_blind_attempts = 0
+        self._rollout_boss_blind_clears = 0
+        self._rollout_boss_blind_encounters = 0
+        self._rollout_a1r1_clears = 0
         self._rollout_chips = []
         self._rollout_antes = []
+        self._rollout_rounds = []
         self._rollout_money_earned = []
         self._rollout_money_spent = []
         self._rollout_play_discard_ratios = []
@@ -91,6 +105,7 @@ class BalatroMetricsCallback(BaseCallback):
         self._rollout_blind_skip_rates = []
         self._rollout_hand_counts = defaultdict(int)
         self._rollout_run_stats = defaultdict(list)
+        self._rollout_consumable_type_used = defaultdict(list)
 
     def _win_pct(self):
         if self.total_episodes == 0:
@@ -196,7 +211,11 @@ class BalatroMetricsCallback(BaseCallback):
                 if info.get("blind_is_boss", False):
                     self.total_boss_blind_clears += 1
                     self.total_boss_blind_encounters += 1
+                    self._rollout_boss_blind_clears += 1
+                    self._rollout_boss_blind_encounters += 1
                     self.recent_boss_blind_outcomes.append(1)
+                if info.get("ante", 0) == 1 and info.get("round", 0) == 1:
+                    self.episode_a1r1_cleared = True
 
             if not done:
                 continue
@@ -209,6 +228,9 @@ class BalatroMetricsCallback(BaseCallback):
 
             if won:
                 self.total_wins += 1
+            if self.episode_a1r1_cleared:
+                self.total_a1r1_clears += 1
+                self._rollout_a1r1_clears += 1
 
             self.recent_outcomes.append(1 if won else 0)
             if len(self.recent_outcomes) > self.recent_window:
@@ -219,6 +241,7 @@ class BalatroMetricsCallback(BaseCallback):
                 self.recent_blind_outcomes.append(0)
                 if info.get("blind_is_boss", False):
                     self.total_boss_blind_encounters += 1
+                    self._rollout_boss_blind_encounters += 1
                     self.recent_boss_blind_outcomes.append(0)
                 death_chips = info.get("chips", 0)
                 if death_chips > self.highest_blind_score:
@@ -233,6 +256,7 @@ class BalatroMetricsCallback(BaseCallback):
             if won:
                 self._rollout_wins += 1
             self._rollout_antes.append(ante)
+            self._rollout_rounds.append(round_)
             self._rollout_money_earned.append(self.episode_money_earned)
             self._rollout_money_spent.append(self.episode_money_spent)
             self._rollout_play_discard_ratios.append(
@@ -255,8 +279,6 @@ class BalatroMetricsCallback(BaseCallback):
                 "high_score":         run_stats.get("high_score", 0),
                 "max_gold":           self.episode_max_gold,
                 "rerolls":            run_stats.get("rerolls", 0),
-                "planets_used":       run_stats.get("planets_used", 0),
-                "tarots_used":        run_stats.get("tarots_used", 0),
                 "jokers_purchased":   self.episode_jokers_purchased,
                 "hands_played":       run_stats.get("hands_played", 0),
                 "discards_remaining": run_stats.get("unused_discards", 0),
@@ -269,6 +291,23 @@ class BalatroMetricsCallback(BaseCallback):
                     self.best_run_stats[name] = value
                 self.logger.record(f"run/episode_{name}", value)
                 self.logger.record(f"run/best_{name}",    self.best_run_stats[name])
+                if name in RUN_STAT_LOWER_IS_BETTER and value > 0:
+                    if name not in self.lowest_run_stats or value < self.lowest_run_stats[name]:
+                        self.lowest_run_stats[name] = value
+                if name in self.lowest_run_stats:
+                    self.logger.record(f"run/lowest_{name}", self.lowest_run_stats[name])
+
+            # Consumables used per type (logged as rollout means)
+            for ctype, stat_key in CONSUMABLE_TYPE_STATS.items():
+                self._rollout_consumable_type_used[ctype].append(run_stats.get(stat_key, 0))
+
+            # Per-consumable all-time use counts (e.g. consumable_spectral/medium_used)
+            for key, usage in (run_stats.get("consumable_usage") or {}).items():
+                ctype = str(usage.get("set", "unknown")).lower()
+                cname = key[2:] if key.startswith("c_") else key
+                self.consumable_use_counts[(ctype, cname)] += usage.get("count", 0)
+            for (ctype, cname), count in self.consumable_use_counts.items():
+                self.logger.record(f"consumable_{ctype}/{cname}_used", count)
 
             # --- Live TensorBoard (best-ever / all-time / rolling) ---
             hand_types = [
@@ -297,6 +336,8 @@ class BalatroMetricsCallback(BaseCallback):
                                self.total_boss_blind_clears / max(1, self.total_boss_blind_encounters))
             self.logger.record("game/boss_blind_clear_rate_last_100",
                                sum(self.recent_boss_blind_outcomes) / max(1, len(self.recent_boss_blind_outcomes)))
+            self.logger.record("game/a1r1_clear_rate_overall",
+                               self.total_a1r1_clears / max(1, self.total_episodes))
             self.logger.record("actions/blind_skip_rate",
                                self.total_blind_skips / max(1, self.total_blind_selections))
 
@@ -349,6 +390,7 @@ class BalatroMetricsCallback(BaseCallback):
             self.episode_consumables_sold = 0
             self.episode_max_gold = 0
             self.episode_jokers_purchased = 0
+            self.episode_a1r1_cleared = False
 
             needs_dump = True
 
@@ -372,6 +414,13 @@ class BalatroMetricsCallback(BaseCallback):
                                self._rollout_blind_clears / max(1, self._rollout_blind_attempts))
             self.logger.record("game_rollout/mean_ante",
                                self._mean(self._rollout_antes))
+            self.logger.record("game_rollout/mean_round",
+                               self._mean(self._rollout_rounds))
+            self.logger.record("game_rollout/a1r1_clear_rate",
+                               self._rollout_a1r1_clears / n)
+            if self._rollout_boss_blind_encounters > 0:
+                self.logger.record("game_rollout/boss_blind_clear_rate",
+                                   self._rollout_boss_blind_clears / self._rollout_boss_blind_encounters)
             self.logger.record("game_rollout/mean_money_earned",
                                self._mean(self._rollout_money_earned))
             self.logger.record("game_rollout/mean_money_spent",
@@ -407,6 +456,11 @@ class BalatroMetricsCallback(BaseCallback):
                 self.logger.record(f"run/rollout_mean_{name}",
                                    self._mean(self._rollout_run_stats[name]))
 
+            # Per-type consumable rollout means
+            for ctype in CONSUMABLE_TYPE_STATS:
+                self.logger.record(f"consumable_{ctype}/rollout_mean_used",
+                                   self._mean(self._rollout_consumable_type_used[ctype]))
+
             # Rollout hand type distribution (one category per hand type)
             rollout_total = sum(self._rollout_hand_counts.values()) or 1
             for ht in hand_types:
@@ -421,8 +475,12 @@ class BalatroMetricsCallback(BaseCallback):
         self._rollout_wins = 0
         self._rollout_blind_clears = 0
         self._rollout_blind_attempts = 0
+        self._rollout_boss_blind_clears = 0
+        self._rollout_boss_blind_encounters = 0
+        self._rollout_a1r1_clears = 0
         self._rollout_chips = []
         self._rollout_antes = []
+        self._rollout_rounds = []
         self._rollout_money_earned = []
         self._rollout_money_spent = []
         self._rollout_play_discard_ratios = []
@@ -436,6 +494,7 @@ class BalatroMetricsCallback(BaseCallback):
         self._rollout_blind_skip_rates = []
         self._rollout_hand_counts = defaultdict(int)
         self._rollout_run_stats = defaultdict(list)
+        self._rollout_consumable_type_used = defaultdict(list)
 
         self.logger.dump(self.num_timesteps)
 

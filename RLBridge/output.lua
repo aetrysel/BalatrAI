@@ -5,6 +5,7 @@ local O = {}
 local utils = require("utils")
 
 local last_hand_info = { handname = "None", score = 0 }
+local last_blind_name = "None"
 
 function O.get_game_state()
     local game_over = 0
@@ -17,24 +18,35 @@ function O.get_game_state()
         blind_cleared = 1
     end
 
+    local blind_name = G.GAME and G.GAME.blind and G.GAME.blind.name or "None"
+    local blind_is_boss = (G.GAME and G.GAME.blind and G.GAME.blind.boss) and 1 or 0
+    if G.STATE == G.STATES.ROUND_EVAL then
+        -- Blind:defeat() resets G.GAME.blind shortly after ROUND_EVAL starts; report the defeated blind instead
+        if blind_name == "" or blind_name == "None" then
+            blind_name = last_blind_name
+        end
+        local blind_states = G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_states
+        blind_is_boss = (blind_states and blind_states.Boss == "Defeated") and 1 or 0
+    elseif blind_name ~= "" and blind_name ~= "None" then
+        last_blind_name = blind_name
+    end
+
     local game_win = 0
     if G.STATE == G.STATES.ROUND_EVAL then
         local ante = G.GAME and G.GAME.round_resets and G.GAME.round_resets.ante or 0
-        local blind = G.GAME and G.GAME.blind or nil
-        local is_boss = blind and blind.boss or false
-        if ante == 9 and is_boss then
+        if ante == 9 and blind_is_boss == 1 then
             game_win = 1
         end
     end
 
     return {
         state = G.STATE,
-        blind_name = G.GAME and G.GAME.blind and G.GAME.blind.name or "None",
+        blind_name = blind_name,
         blind_cleared = blind_cleared,
         game_win = game_win,
         ante = G.GAME and G.GAME.round_resets and G.GAME.round_resets.ante or 1,
         round_count = G.GAME and G.GAME.round or 0,
-        blind_is_boss = (G.GAME and G.GAME.blind and G.GAME.blind.boss) and 1 or 0,
+        blind_is_boss = blind_is_boss,
         game_over = game_over,
         round = O.get_round_info(),
         blind_chips = O.get_blind_chips(),
@@ -67,10 +79,21 @@ function O.get_run_stats()
         rerolls = rs and rs.times_rerolled and rs.times_rerolled.amt or 0,
         planets_used = usage and usage.planet or 0,
         tarots_used = usage and usage.tarot or 0,
+        spectrals_used = usage and usage.spectral or 0,
         hands_played = game and game.hands_played or 0,
         unused_discards = game and game.unused_discards or 0,
         deck_size = G.playing_cards and #G.playing_cards or 0,
+        consumable_usage = O.get_consumable_usage(),
     }
+end
+
+-- Per-consumable use counts this run, keyed by center key (e.g. c_medium -> {count, set})
+function O.get_consumable_usage()
+    local usage = {}
+    for key, v in pairs(G.GAME and G.GAME.consumeable_usage or {}) do
+        usage[key] = { count = v.count or 0, set = v.set or "Unknown" }
+    end
+    return usage
 end
 
 function O.get_blind_chips()
