@@ -43,6 +43,13 @@ class BalatroMetricsCallback(BaseCallback):
         # All-time per-consumable use counts, keyed by (type, name)
         self.consumable_use_counts = defaultdict(int)
 
+        # All-time per-joker stats, keyed by sanitized joker name (logged as joker_by_name/*)
+        self.joker_taken_counts = defaultdict(int)
+        self.joker_sold_counts = defaultdict(int)
+        self.joker_rounds_held = defaultdict(list)   # rounds_held when each copy left (sold/destroyed/run end)
+        self.joker_max_rounds_held = defaultdict(int)
+        self.all_joker_rounds_held = []              # every finished joker hold, all jokers
+
         # All-time hand type tracking
         self.hand_type_counts = defaultdict(int)
         self.hand_type_scores = defaultdict(list)
@@ -75,12 +82,14 @@ class BalatroMetricsCallback(BaseCallback):
         self.episode_max_gold = 0
         self.episode_jokers_purchased = 0
         self.episode_a1r1_cleared = False
+        self.episode_joker_holds = []   # rounds_held of each joker that left this episode (incl. run end)
 
         # Previous-step deltas
         self._prev_chips = 0
         self._prev_gold = 0
         self._prev_consumable_count = 0
         self._prev_joker_count = 0
+        self._prev_jokers_by_id = {}  # joker id → joker dict from the previous step
 
         # --- Rollout buffers (reset after each policy update) ---
         self._rollout_episodes = 0
@@ -100,6 +109,7 @@ class BalatroMetricsCallback(BaseCallback):
         self._rollout_jokers_sold = []
         self._rollout_jokers_end = []
         self._rollout_joker_buy_sell_ratios = []
+        self._rollout_joker_mean_holds = []
         self._rollout_consumables_used = []
         self._rollout_consumables_failed = []
         self._rollout_consumables_sold = []
@@ -107,6 +117,22 @@ class BalatroMetricsCallback(BaseCallback):
         self._rollout_hand_counts = defaultdict(int)
         self._rollout_run_stats = defaultdict(list)
         self._rollout_consumable_type_used = defaultdict(list)
+
+    @staticmethod
+    def _joker_key(name):
+        """TensorBoard-safe joker name, e.g. 'Mr. Bones' → 'mr_bones'."""
+        key = "".join(c if c.isalnum() else "_" for c in str(name).lower())
+        return "_".join(filter(None, key.split("_"))) or "unknown"
+
+    def _record_joker_hold(self, joker, sold):
+        key = self._joker_key(joker.get("name", "Unknown"))
+        rounds = joker.get("rounds_held", 0)
+        self.joker_rounds_held[key].append(rounds)
+        self.joker_max_rounds_held[key] = max(self.joker_max_rounds_held[key], rounds)
+        self.all_joker_rounds_held.append(rounds)
+        self.episode_joker_holds.append(rounds)
+        if sold:
+            self.joker_sold_counts[key] += 1
 
     def _win_pct(self):
         if self.total_episodes == 0:
@@ -162,6 +188,7 @@ class BalatroMetricsCallback(BaseCallback):
 
             # Money tracking
             gold = info.get("gold", 0)
+            gold_increased = gold > self._prev_gold
             if gold > self._prev_gold:
                 self.episode_money_earned += gold - self._prev_gold
             elif gold < self._prev_gold:
@@ -182,6 +209,17 @@ class BalatroMetricsCallback(BaseCallback):
             elif joker_delta < 0:
                 self.episode_jokers_sold += abs(joker_delta)
             self._prev_joker_count = curr_joker_count
+
+            # Per-joker lifecycle by id: new id = taken; missing id = sold (gold up) or destroyed
+            if "jokers" in info:
+                curr_jokers_by_id = {j["id"]: j for j in info["jokers"] if j.get("id") is not None}
+                for jid, joker in curr_jokers_by_id.items():
+                    if jid not in self._prev_jokers_by_id:
+                        self.joker_taken_counts[self._joker_key(joker.get("name", "Unknown"))] += 1
+                for jid, joker in self._prev_jokers_by_id.items():
+                    if jid not in curr_jokers_by_id:
+                        self._record_joker_hold(joker, sold=gold_increased)
+                self._prev_jokers_by_id = curr_jokers_by_id
 
             # Action tracking
             if action_taken == 2:
@@ -363,6 +401,28 @@ class BalatroMetricsCallback(BaseCallback):
             self.logger.record("joker/episode_buy_sell_ratio",
                                self.episode_jokers_gained / max(1, self.episode_jokers_sold))
 
+            # Joker hold metrics: jokers still held at run end count as held until the end
+            end_holds = [j.get("rounds_held", 0) for j in self._prev_jokers_by_id.values()]
+            for joker in self._prev_jokers_by_id.values():
+                self._record_joker_hold(joker, sold=False)
+            self._prev_jokers_by_id = {}
+            ep_mean_hold = self._mean(self.episode_joker_holds)
+            self._rollout_joker_mean_holds.append(ep_mean_hold)
+            self.logger.record("joker/episode_mean_rounds_held",     ep_mean_hold)
+            self.logger.record("joker/episode_max_rounds_held",      max(self.episode_joker_holds, default=0))
+            self.logger.record("joker/episode_end_mean_rounds_held", self._mean(end_holds))
+            self.logger.record("joker/alltime_mean_rounds_held",     self._mean(self.all_joker_rounds_held))
+
+            # All-time per-joker stats (e.g. joker_by_name/blueprint_taken)
+            for key, taken in self.joker_taken_counts.items():
+                self.logger.record(f"joker_by_name/{key}_taken", taken)
+                self.logger.record(f"joker_by_name/{key}_sold",  self.joker_sold_counts[key])
+                if self.joker_rounds_held[key]:
+                    self.logger.record(f"joker_by_name/{key}_mean_rounds_held",
+                                       self._mean(self.joker_rounds_held[key]))
+                    self.logger.record(f"joker_by_name/{key}_max_rounds_held",
+                                       self.joker_max_rounds_held[key])
+
             # All-time hand type stats (one category per hand type)
             total_hands = sum(self.hand_type_counts.values()) or 1
             for ht in hand_types:
@@ -396,6 +456,7 @@ class BalatroMetricsCallback(BaseCallback):
             self.episode_max_gold = 0
             self.episode_jokers_purchased = 0
             self.episode_a1r1_cleared = False
+            self.episode_joker_holds = []
 
             needs_dump = True
 
@@ -447,6 +508,8 @@ class BalatroMetricsCallback(BaseCallback):
                                self._mean(self._rollout_jokers_end))
             self.logger.record("joker/mean_buy_sell_ratio",
                                self._mean(self._rollout_joker_buy_sell_ratios))
+            self.logger.record("joker/rollout_mean_rounds_held",
+                               self._mean(self._rollout_joker_mean_holds))
 
             # Consumable rollout metrics
             self.logger.record("consumables/mean_used",
@@ -493,6 +556,7 @@ class BalatroMetricsCallback(BaseCallback):
         self._rollout_jokers_sold = []
         self._rollout_jokers_end = []
         self._rollout_joker_buy_sell_ratios = []
+        self._rollout_joker_mean_holds = []
         self._rollout_consumables_used = []
         self._rollout_consumables_failed = []
         self._rollout_consumables_sold = []
