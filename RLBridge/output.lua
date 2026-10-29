@@ -179,6 +179,7 @@ function O.get_jokers()
     if G.jokers and G.jokers.cards then
         for i, card in ipairs(G.jokers.cards) do
             table.insert(jokers, {
+                id = card.sort_id,
                 name = card.config.center.name or "Unknown",
                 sell_cost = card.sell_cost or 1,
                 slot = i,

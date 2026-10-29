@@ -11,3 +11,6 @@ GAME_OVER_STATE_ID = 11
 # Pack state IDs: all states where a booster pack is open
 # 999 = G.STATES.SMODS_BOOSTER_OPENED (Steamodded replaces all vanilla pack states)
 PACK_STATE_IDS = frozenset({9, 10, 15, 17, 18, 999})
+
+# Max blinds-cleared-while-held counted per joker (reward potential + obs normalization)
+TENURE_CAP = 6

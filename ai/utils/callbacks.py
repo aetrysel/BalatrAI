@@ -5,6 +5,7 @@ from collections import defaultdict, deque
 RUN_STAT_NAMES = [
     "high_score", "max_gold", "rerolls",
     "jokers_purchased", "hands_played", "discards_remaining", "final_deck_size",
+    "max_joker_tenure", "fresh_joker_sells", "mean_shop_exit_gold",
 ]
 # Consumable type -> run_stats key, logged as consumable_<type>/*
 CONSUMABLE_TYPE_STATS = {"tarot": "tarots_used", "planet": "planets_used", "spectral": "spectrals_used"}
@@ -275,6 +276,7 @@ class BalatroMetricsCallback(BaseCallback):
 
             # Per-run stats (game counters from run_stats + Python accumulators)
             run_stats = info.get("run_stats", {}) or {}
+            reward_stats = info.get("reward_stats", {}) or {}
             ep_stats = {
                 "high_score":         run_stats.get("high_score", 0),
                 "max_gold":           self.episode_max_gold,
@@ -283,6 +285,9 @@ class BalatroMetricsCallback(BaseCallback):
                 "hands_played":       run_stats.get("hands_played", 0),
                 "discards_remaining": run_stats.get("unused_discards", 0),
                 "final_deck_size":    run_stats.get("deck_size", 0),
+                "max_joker_tenure":   reward_stats.get("max_joker_tenure", 0),
+                "fresh_joker_sells":  reward_stats.get("fresh_joker_sells", 0),
+                "mean_shop_exit_gold": reward_stats.get("mean_shop_exit_gold", 0.0),
             }
             for name in RUN_STAT_NAMES:
                 value = ep_stats[name]

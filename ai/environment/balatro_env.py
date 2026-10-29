@@ -45,6 +45,7 @@ class BalatroEnv(gym.Env):
         self.logger = logging.getLogger(__name__)
         self.current_state = None
         self.prev_state = None
+        self.joker_tenure = {}
         self.game_over = False
         self.restart_pending = False
         self.seed = seed
@@ -101,7 +102,7 @@ class BalatroEnv(gym.Env):
         ]))
 
         # Observation space
-        self.OBSERVATION_SIZE = 412
+        self.OBSERVATION_SIZE = 417
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
@@ -129,6 +130,7 @@ class BalatroEnv(gym.Env):
         self.game_over = False
         self.actions_taken = []
         self._episode_accumulated_reward = 0.0
+        self.joker_tenure = {}  # joker sort_id → blinds cleared while held
         
         if self.restart_pending:
             self.restart_pending = False
@@ -160,6 +162,7 @@ class BalatroEnv(gym.Env):
             if not initial_request:
                 raise RuntimeError("Failed to receive initial request from Balatro after restart")
         # Process initial state for SB3
+        self._annotate_joker_tenure(initial_request)
         self.current_state = initial_request
         gs_for_ep = self.current_state.get('game_state', {})
         actual_seed = self.seed if self.seed else gs_for_ep.get('seed', '')
@@ -243,6 +246,7 @@ class BalatroEnv(gym.Env):
                 "consumable_count": len(current_gs.get('consumables', [])),
                 "gold": current_gs.get('gold', 0),
                 "run_stats": current_gs.get('run_stats', {}),
+                "reward_stats": self.reward_calculator.episode_stats(),
                 "action_taken": response_data.get('action', 0),
             }
             if not self.is_endless:
@@ -254,6 +258,7 @@ class BalatroEnv(gym.Env):
             if not next_request:
                 self.history_logger.log_episode_end(self._episode_accumulated_reward, self.reward_calculator.episode_reward_breakdown)
                 return win_obs, win_reward, True, False, {**win_info, "timeout": True}
+            self._annotate_joker_tenure(next_request)
             self.current_state = next_request
             available_actions = next_request.get('available_actions', [])
             try:
@@ -309,6 +314,7 @@ class BalatroEnv(gym.Env):
                 "consumable_count": len(last_gs.get('consumables', [])),
                 "gold": last_gs.get('gold', 0),
                 "run_stats": last_gs.get('run_stats', {}),
+                "reward_stats": self.reward_calculator.episode_stats(),
                 "action_taken": response_data.get('action', 0),
             }
         while next_request.get('game_state', {}).get('state') == 4:
@@ -328,6 +334,7 @@ class BalatroEnv(gym.Env):
                 f"actions: {next_request.get('available_actions', [])}"
             )
         # Update current state
+        self._annotate_joker_tenure(next_request)
         self.current_state = next_request
         game_state = self.current_state.get('game_state', {})
 
@@ -357,6 +364,7 @@ class BalatroEnv(gym.Env):
             "consumable_count": len(game_state.get('consumables', [])),
             "gold": game_state.get('gold', 0),
             "run_stats": game_state.get('run_stats', {}),
+            "reward_stats": self.reward_calculator.episode_stats(),
             "action_taken": response_data.get('action', 0),
         }
 
@@ -371,6 +379,22 @@ class BalatroEnv(gym.Env):
 
         self.history_logger.log_step(self.prev_state, response_data, next_request)
         return observation, reward, terminated, truncated, info
+
+    def _annotate_joker_tenure(self, request):
+        """Set rounds_held on each joker in request; increments when a blind clear begins."""
+        game_state = request.get('game_state', {})
+        prev_gs = (self.current_state or {}).get('game_state', {})
+        cleared_now = game_state.get('blind_cleared', 0) == 1 and prev_gs.get('blind_cleared', 0) != 1
+        held = {}
+        for joker in game_state.get('jokers', []):
+            joker_id = joker.get('id')
+            if joker_id is None:
+                joker['rounds_held'] = 0
+                continue
+            rounds = self.joker_tenure.get(joker_id, 0) + (1 if cleared_now else 0)
+            held[joker_id] = rounds
+            joker['rounds_held'] = rounds
+        self.joker_tenure = held
 
     def cleanup(self):
         """

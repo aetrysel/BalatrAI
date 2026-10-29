@@ -1,12 +1,17 @@
 from typing import Dict, Any
 import numpy as np
-from ..utils.constants import PACK_STATE_IDS, SHOP_STATE_ID, SELECTING_HAND_STATE_ID
+from ..utils.constants import PACK_STATE_IDS, SHOP_STATE_ID, SELECTING_HAND_STATE_ID, TENURE_CAP
 
 # Inventory potential weights: reward = Φ(s') - Φ(s), so buy→sell nets zero
-JOKER_POTENTIAL = 5.0
+# Joker potential grows with rounds held; selling refunds all accumulated tenure reward
+JOKER_BASE_POTENTIAL = 4.0
+JOKER_TENURE_POTENTIAL = 1.5  # per blind cleared while held
 CONSUMABLE_POTENTIAL = 1.5
 MID_BLIND_SELL_PENALTY = 2.0
-JOKER_HOLD_BONUS = 0.5  # per joker held when a blind is cleared
+FRESH_SELL_PENALTY = 1.0  # selling a joker before it has been held through a blind
+SAVINGS_TIER_BONUS = 1.0  # per $5 interest tier held when leaving the shop
+SAVINGS_TIER_CAP = 5
+MONEY_EARNED_WEIGHT = 0.5
 
 class BalatroRewardCalculator:
     def __init__(self):
@@ -48,6 +53,11 @@ class BalatroRewardCalculator:
         self.total_jokers = 0
         self.peak_money = 0
 
+        # Episode stats for metrics
+        self.fresh_joker_sells = 0
+        self.max_joker_tenure = 0
+        self.shop_exit_golds: list = []
+
         self.episode_reward_breakdown: list[str] = []
 
         self.REWARD_THRESHOLDS = {
@@ -63,15 +73,28 @@ class BalatroRewardCalculator:
         reward += self.calculate_shop_reward(current_state, prev_state)
         reward += self.calculate_pack_reward(current_state, prev_state)
         reward += self.calculate_play_reward(current_state, prev_state)
-        return reward
+        return float(np.clip(reward, -30.0, 120.0))
 
     @staticmethod
-    def _inventory_potential(game_state) -> float:
-        return (JOKER_POTENTIAL * len(game_state.get('jokers', []))
+    def _joker_potential(joker) -> float:
+        return JOKER_BASE_POTENTIAL + JOKER_TENURE_POTENTIAL * min(joker.get('rounds_held', 0), TENURE_CAP)
+
+    @classmethod
+    def _inventory_potential(cls, game_state) -> float:
+        return (sum(cls._joker_potential(j) for j in game_state.get('jokers', []))
                 + CONSUMABLE_POTENTIAL * len(game_state.get('consumables', [])))
 
+    def episode_stats(self) -> Dict[str, float]:
+        """Per-episode reward-shaping stats for TensorBoard."""
+        golds = self.shop_exit_golds
+        return {
+            "fresh_joker_sells": self.fresh_joker_sells,
+            "max_joker_tenure": self.max_joker_tenure,
+            "mean_shop_exit_gold": (sum(golds) / len(golds)) if golds else 0.0,
+        }
+
     def calculate_inventory_reward(self, current_state, prev_state=None) -> float:
-        """Potential-based reward for owned jokers/consumables, plus mid-blind sell penalty."""
+        """Tenure-weighted inventory potential, fresh/mid-blind sell penalties, and shop-exit savings bonus."""
         if not prev_state:
             return 0.0
         reward = 0.0
@@ -85,6 +108,34 @@ class BalatroRewardCalculator:
         if potential_delta != 0.0:
             reward += potential_delta
             breakdown.append(f"inventory_potential: {potential_delta:+.2f}")
+
+        curr_jokers = current_game_state.get('jokers', [])
+        for j in curr_jokers:
+            self.max_joker_tenure = max(self.max_joker_tenure, j.get('rounds_held', 0))
+
+        # Selling a joker acquired this round (pack/tarot/shop flip)
+        gold_gained = current_game_state.get('gold', 0) > prev_game_state.get('gold', 0)
+        curr_ids = {j.get('id') for j in curr_jokers}
+        sold = [j for j in prev_game_state.get('jokers', [])
+                if j.get('id') is not None and j.get('id') not in curr_ids]
+        fresh_sold = [j for j in sold if j.get('rounds_held', 0) == 0]
+        if gold_gained and fresh_sold:
+            penalty = FRESH_SELL_PENALTY * len(fresh_sold)
+            reward -= penalty
+            self.fresh_joker_sells += len(fresh_sold)
+            breakdown.append(f"fresh_joker_sell x{len(fresh_sold)}: -{penalty:.2f}")
+
+        # Savings: reward each interest tier held when leaving the shop
+        if (prev_game_state.get('state', 0) == SHOP_STATE_ID
+                and current_game_state.get('state', 0) != SHOP_STATE_ID
+                and current_game_state.get('state', 0) not in PACK_STATE_IDS):
+            exit_gold = current_game_state.get('gold', 0)
+            self.shop_exit_golds.append(exit_gold)
+            tiers = min(max(exit_gold, 0) // 5, SAVINGS_TIER_CAP)
+            if tiers > 0:
+                savings = SAVINGS_TIER_BONUS * tiers
+                reward += savings
+                breakdown.append(f"savings ${exit_gold} ({tiers} tiers): +{savings:.2f}")
 
         # Selling during a blind: allowed but discouraged (except clearing a full consumable area)
         if prev_game_state.get('state', 0) == SELECTING_HAND_STATE_ID:
@@ -146,10 +197,6 @@ class BalatroRewardCalculator:
             reward += 8.0
             breakdown.append("voucher_purchased: +8.00")
 
-        if prev_state_id == SHOP_STATE_ID and curr_state_id in PACK_STATE_IDS:
-            reward += 3.0
-            breakdown.append("entered_pack: +3.00")
-
         # BUY_AND_USE_CONSUMABLE: consumable shop item disappeared, money was spent, and it wasn't kept
         prev_consumable_shop = [it for it in prev_shop_items if it.get('type') == 'consumable']
         curr_consumable_shop = [it for it in curr_shop_items if it.get('type') == 'consumable']
@@ -188,9 +235,7 @@ class BalatroRewardCalculator:
 
             new_consumables = curr_consumable_count - prev_consumable_count
 
-            if prev_state_id == 18:
-                reward += 1.0
-            elif prev_state_id == 10:
+            if prev_state_id == 10:
                 if new_consumables > 0:
                     reward += 4.0
             elif prev_state_id in {9, 15}:
@@ -271,12 +316,12 @@ class BalatroRewardCalculator:
             is_joker_sell = joker_decreased and gold_increased
 
             if is_consumable_use:
-                reward += 2.0
-                reward_breakdown.append("use_consumable: +2.00")
+                reward += CONSUMABLE_POTENTIAL
+                reward_breakdown.append(f"use_consumable: +{CONSUMABLE_POTENTIAL:.2f}")
 
             # Money earned from non-sell sources: gold cards, joker effects, blind payouts, interest
             if gold_increased and not is_consumable_sell and not is_joker_sell:
-                money_reward = (current_gold - prev_gold) * 0.4
+                money_reward = (current_gold - prev_gold) * MONEY_EARNED_WEIGHT
                 reward += money_reward
                 reward_breakdown.append(f"money_earned +{current_gold - prev_gold}: +{money_reward:.2f}")
 
@@ -299,27 +344,26 @@ class BalatroRewardCalculator:
             self._track_hand_played(chip_gain, hand_type_to_use, current_chips, blind_chips)
 
             chip_percentage = (chip_gain / blind_chips) * 100
-            chip_reward = float(np.clip(chip_percentage * 0.2, 0, 20))
+            chip_reward = float(np.clip(chip_percentage * 0.1, 0, 10))
             reward += chip_reward
             reward_breakdown.append(f"Chip gain: +{chip_gain} ({chip_percentage:.1f}% of blind): +{chip_reward:.2f}")
 
         # === BLIND COMPLETION (per-blind, not just game win) ===
         if (blind_cleared_flag or game_won) and not self.blind_already_defeated:
-            ante_multiplier = 1.5 ** (ante - 1)
-            base_reward = 30.0 * ante_multiplier
+            base_reward = 15.0 + 5.0 * ante
 
             round_info = inner_game_state.get('round', {})
             hands_left = round_info.get('hands_left', 0)
             hands_used = 4 - hands_left
 
             if hands_used == 1:
-                efficiency_bonus = 25.0
+                efficiency_bonus = 10.0
             elif hands_used == 2:
-                efficiency_bonus = 15.0
+                efficiency_bonus = 6.0
             elif hands_used == 3:
-                efficiency_bonus = 8.0
+                efficiency_bonus = 3.0
             else:
-                efficiency_bonus = max(0, 5.0 - hands_used)
+                efficiency_bonus = 0.0
 
             total_blind_reward = base_reward + efficiency_bonus
             reward += total_blind_reward
@@ -332,13 +376,6 @@ class BalatroRewardCalculator:
                 reward_breakdown.append(f"deck_thinning {self.pending_cards_removed} cards: +{deck_bonus:.1f}")
                 self.pending_cards_removed = 0
 
-            # Holding bonus: jokers kept through the blind
-            jokers_held = len(inner_game_state.get('jokers', []))
-            if jokers_held > 0:
-                hold_bonus = JOKER_HOLD_BONUS * jokers_held
-                reward += hold_bonus
-                reward_breakdown.append(f"jokers_held x{jokers_held}: +{hold_bonus:.2f}")
-
             self.blind_already_defeated = True
             self.winning_chips = current_chips
             print(f"✅ Blind cleared! Ante {self.current_blind_ante} - {self.current_blind_name} "
@@ -347,7 +384,7 @@ class BalatroRewardCalculator:
 
         # === PROGRESSION BONUS ===
         if ante > self.current_ante:
-            ante_progress_bonus = 10.0 * ante
+            ante_progress_bonus = 5.0 * ante
             reward += ante_progress_bonus
             reward_breakdown.append(f"ante_progression ante {ante}: +{ante_progress_bonus:.1f}")
             self.current_ante = ante
@@ -356,8 +393,8 @@ class BalatroRewardCalculator:
         blind_name_val = inner_game_state.get('blind_name', '')
         is_boss = blind_name_val not in ['Small Blind', 'Big Blind', 'None', '']
         if (blind_cleared_flag or game_won) and is_boss and self.blind_already_defeated:
-            reward += 15.0 * ante
-            reward_breakdown.append(f"boss_blind_bonus ante {ante}: +{15.0 * ante:.1f}")
+            reward += 5.0 * ante
+            reward_breakdown.append(f"boss_blind_bonus ante {ante}: +{5.0 * ante:.1f}")
 
         # === GAME OVER PENALTY ===
         if game_over == 1 and not hasattr(self, 'game_over_penalty_applied') and not self.blind_already_defeated:
@@ -381,7 +418,7 @@ class BalatroRewardCalculator:
         self.previous_chips = current_chips
         self.previous_hand_played = current_hand_played
 
-        return float(np.clip(reward, -25.0, 500.0))
+        return float(np.clip(reward, -25.0, 120.0))
 
     def reset(self):
         """Reset for new episode."""
@@ -431,6 +468,9 @@ class BalatroRewardCalculator:
         self.total_jokers = 0
         self.peak_money = 0
         self.episode_reward_breakdown = []
+        self.fresh_joker_sells = 0
+        self.max_joker_tenure = 0
+        self.shop_exit_golds = []
 
         if hasattr(self, 'game_over_penalty_applied'):
             delattr(self, 'game_over_penalty_applied')

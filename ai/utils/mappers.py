@@ -5,7 +5,7 @@ Mappers for converting between Balatro game data and RL-compatible formats.
 import numpy as np
 from typing import Dict, List, Any
 from ..utils.validation import GameStateValidator, ResponseValidator
-from ..utils.constants import PACK_STATE_IDS, SHOP_STATE_ID
+from ..utils.constants import PACK_STATE_IDS, SHOP_STATE_ID, TENURE_CAP
 import logging
 
 
@@ -139,7 +139,7 @@ class BalatroStateMapper:
       1  game_win
       1  retry_count
      16  deck name one-hot
-     20  jokers (5 × 4: occupied, name_id, sell_cost_norm, edition_id)
+     25  jokers (5 × 5: occupied, name_id, sell_cost_norm, edition_id, rounds_held_norm)
      10  consumables held (5 × 2: occupied, name_id)
      21  shop (4 joker × 3 + 1 voucher × 3 + 2 booster × 3)
      10  pack_cards (5 × 2: occupied, name_id)
@@ -149,7 +149,7 @@ class BalatroStateMapper:
      17  available actions mask
     """
 
-    OBSERVATION_SIZE = 412
+    OBSERVATION_SIZE = 417
 
     def __init__(self, observation_size: int, max_actions: int):
         self.observation_size = observation_size
@@ -225,9 +225,10 @@ class BalatroStateMapper:
                 features.append(item_id_norm(j.get('name', '')))
                 features.append(normalize(float(j.get('sell_cost', 0)), 20.0))
                 features.append(EDITION_IDS.get(j.get('edition', 'none'), 0) / MAX_EDITION_ID)
+                features.append(normalize(float(j.get('rounds_held', 0)), float(TENURE_CAP)))
             else:
-                features.extend([0.0, 0.0, 0.0, 0.0])
-        return features  # 5 × 4 = 20
+                features.extend([0.0, 0.0, 0.0, 0.0, 0.0])
+        return features  # 5 × 5 = 25
 
     def _extract_consumable_features(self, consumables: List[Dict[str, Any]]) -> List[float]:
         features = []

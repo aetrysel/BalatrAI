@@ -201,7 +201,7 @@ MaskablePPO (from sb3-contrib) with MlpPolicy. Key hyperparameters:
 - `gamma`: 0.99, `ent_coef`: 0.01, `learning_rate`: 3e-4
 
 ### Observation Space
-Shape `(414,)` float32 vector built by `ai/utils/mappers.py` (`BalatroStateMapper`):
+Shape `(417,)` float32 vector built by `ai/utils/mappers.py` (`BalatroStateMapper`):
 
 | Slice | Features | Count |
 |-------|----------|-------|
@@ -211,7 +211,7 @@ Shape `(414,)` float32 vector built by `ai/utils/mappers.py` (`BalatroStateMappe
 | Game state | one-hot (20) + game_over + game_win + retry_count | 23 |
 | Blind identity | blind_name_id (norm /30), blind_is_boss | 2 |
 | Deck | deck name one-hot | 16 |
-| Jokers | 5 slots × 4 (occupied, name_id, sell_cost, edition) | 20 |
+| Jokers | 5 slots × 5 (occupied, name_id, sell_cost, edition, rounds_held norm /6) | 25 |
 | Consumables | 5 slots × 2 (occupied, name_id) | 10 |
 | Shop | 4 joker + 1 voucher + 2 booster slots × 3 each | 21 |
 | Pack cards | 5 slots × 2 (occupied, name_id) | 10 |
@@ -226,23 +226,26 @@ Shape `(414,)` float32 vector built by `ai/utils/mappers.py` (`BalatroStateMappe
 Four components (summed every step):
 
 **Inventory reward** (any state, potential-based so buy→sell nets 0):
-- Φ = 5 × jokers owned + 1.5 × consumables owned; reward = Φ(s') − Φ(s)
+- Φ = Σ_jokers (4 + 1.5 × min(rounds_held, 6)) + 1.5 × consumables owned; reward = Φ(s') − Φ(s)
+- `rounds_held` = blinds cleared while holding that joker, tracked per `sort_id` in `BalatroEnv._annotate_joker_tenure` and injected into each joker dict; selling refunds all tenure reward
+- Selling a joker with `rounds_held == 0` (any state): −1 per joker
 - Selling during SELECTING_HAND: −2 (except a consumable sell when consumable slots are full)
+- Savings on leaving the shop: +1 per $5 interest tier held (max +5 at $25)
 
-**Play reward** (any state):
-- Chip gain: up to +20
-- Blind clear: +30 × 1.5^(ante-1); one-hand bonuses (+25/+15/+8); +0.5 per joker held
-- Ante progression: +10 × ante; boss blind: +15 × ante
-- Money earned (non-sell sources): +0.4 × gain; consumable use: +2
+**Play reward** (any state, clipped to [−25, +120]):
+- Chip gain: up to +10
+- Blind clear: +(15 + 5 × ante); one-hand bonuses (+10/+6/+3); deck thinning +1 per card removed
+- Ante progression: +5 × ante; boss blind: +5 × ante
+- Money earned (non-sell sources): +0.5 × gain; consumable use: +1.5 (= consumable potential, so acquire→use nets 0)
 - Game over: −15 + up to +8 progress credit
 
 **Shop reward** (tanh-scaled to ±5):
-- Money spent: −0.3 × log1p(spent); buy-and-use consumable: +2; voucher: +8; enter pack: +3
+- Money spent: −0.3 × log1p(spent); buy-and-use consumable: +2; voucher: +8
 - Leave shop: +1 × joker slot utilization; −3 if broke with no jokers
 
-**Pack reward**: planet pick +4, tarot/spectral kept +3, buffoon/standard pick +1
+**Pack reward**: planet pick +4, tarot/spectral kept +3, standard pick +1 (buffoon picks rewarded via joker potential only)
 
-Reward clipped to [−25, +500].
+Step total clipped to [−30, +120]. No `VecNormalize`; SB3 normalizes advantages per batch.
 
 ## Communication with Claude
 - Please keep chats as efficient as possible and brief. No fluff talk, just get to the point
