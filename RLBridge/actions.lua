@@ -106,14 +106,20 @@ end
 local action_state = {}
 -- Persists across action_state resets until state leaves pack entirely.
 -- Balatro resets pack_choices during async cleanup after skip_booster fires, which
--- temporarily makes select_pack_card appear valid again. This flag blocks both
+-- temporarily makes select_pack_card appear valid again. This blocks both
 -- actions for the remainder of the pack state after skip_booster is executed.
-local skip_booster_executed = false
+-- Holds the G.pack_cards area that was skipped, so a chained pack (e.g. Double Tag
+-- opening a second pack while the state stays in 999) gets a new area and is not blocked.
+local skipped_pack_area = nil
+
+local function is_current_pack_skipped()
+    return skipped_pack_area ~= nil and skipped_pack_area == G.pack_cards
+end
 
 function ACTIONS.reset_state()
     action_state = {}
     if not is_pack_state() then
-        skip_booster_executed = false
+        skipped_pack_area = nil
     end
 end
 
@@ -393,7 +399,7 @@ local action_registry = {
         end,
         available_when = function()
             if not (is_pack_state()
-                and not skip_booster_executed
+                and not is_current_pack_skipped()
                 and G.pack_cards and G.pack_cards.cards and #G.pack_cards.cards > 0
                 and (G.GAME.pack_choices or 0) > 0
                 and utils.is_game_ready_for_action()
@@ -411,12 +417,12 @@ local action_registry = {
     },
     skip_booster = {
         execute = function(params)
-            skip_booster_executed = true
+            skipped_pack_area = G.pack_cards
             return input.skip_booster()
         end,
         available_when = function()
             if not is_pack_state() then return false end
-            if skip_booster_executed then return false end
+            if is_current_pack_skipped() then return false end
             -- In SMODS state 999, wait for pack cards to load before allowing any actions.
             if G.STATES.SMODS_BOOSTER_OPENED and G.STATE == G.STATES.SMODS_BOOSTER_OPENED then
                 if not (G.pack_cards and G.pack_cards.cards and #G.pack_cards.cards > 0) then
