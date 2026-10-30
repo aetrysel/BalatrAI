@@ -12,12 +12,16 @@ local response_pipe
 
 local os_name = os.getenv("OS") or love.system.getOS()
 
+-- Worker ID scopes pipe names / socket port per instance; unset keeps the single-instance names
+local worker_id = os.getenv("BALATRO_WORKER_ID")
+local pipe_suffix = worker_id and ("_" .. worker_id) or ""
+
 if os_name == "Windows_NT" then
-    request_pipe = "\\\\.\\pipe\\balatro_request"
-    response_pipe = "\\\\.\\pipe\\balatro_response"
+    request_pipe = "\\\\.\\pipe\\balatro_request" .. pipe_suffix
+    response_pipe = "\\\\.\\pipe\\balatro_response" .. pipe_suffix
 else
-    request_pipe = "/tmp/balatro_request"
-    response_pipe = "/tmp/balatro_response"
+    request_pipe = "/tmp/balatro_request" .. pipe_suffix
+    response_pipe = "/tmp/balatro_response" .. pipe_suffix
 end
 
 local request_handle = nil
@@ -26,7 +30,7 @@ local response_handle = nil
 -- Communication mode: "pipe" (default) or "socket" (viewer instance)
 local comm_mode = os.getenv("BALATRO_COMM_MODE") or "pipe"
 local socket_host = os.getenv("BALATRO_SOCKET_HOST") or "127.0.0.1"
-local socket_port = tonumber(os.getenv("BALATRO_SOCKET_PORT")) or 9000
+local socket_port = (tonumber(os.getenv("BALATRO_SOCKET_PORT")) or 9000) + (tonumber(worker_id) or 0)
 
 local socket_conn = nil  -- LuaSocket connection handle
 

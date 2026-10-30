@@ -38,6 +38,12 @@ end
 function AI.init()
     communication.init()
 
+    -- Launcher-managed instances start the RL loop without waiting for the R key
+    if os.getenv("BALATRO_AUTOSTART") == "1" then
+        rl_training_active = true
+        utils.log_ai("RL Training STARTED (BALATRO_AUTOSTART)")
+    end
+
     -- Hook into Love2D keyboard events
     if love and love.keypressed then
         local original_keypressed = love.keypressed
@@ -361,7 +367,7 @@ function AI.execute_auto_skip_action(current_state, available_actions)
     
     local exec_params = {}
     if action_id == 4 then
-        local config_path = "/tmp/balatro_run_config.json"
+        local config_path = os.getenv("BALATRO_RUN_CONFIG") or "/tmp/balatro_run_config.json"
         local f = io.open(config_path, "r")
         if f then
             local dkjson = require("dkjson")

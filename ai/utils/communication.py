@@ -1,8 +1,11 @@
+import errno
 import json
 import logging
 import os
 import platform
-from typing import Dict, Any, Optional
+import select
+import time
+from typing import Callable, Dict, Any, Optional
 
 import socket
 import threading
@@ -289,3 +292,88 @@ class BalatroPipeIO:
         
 
             self.logger.debug("Dual pipe communication cleanup complete")
+
+
+class ManagedPipeIO(BalatroPipeIO):
+    """
+    Linux FIFO transport for launcher-managed instances (one pipe pair per worker).
+
+    Unlike BalatroPipeIO it never blocks forever: opening and reading poll the
+    game process, so a crashed or hung instance surfaces as a None request
+    that the environment turns into an instance restart.
+    """
+
+    POLL_SECS = 1.0
+
+    def __init__(self, worker_id, alive_check: Callable[[], bool], read_timeout: float = 300.0):
+        self.logger = logging.getLogger(__name__)
+        self.worker_id = worker_id
+        self.alive_check = alive_check
+        self.read_timeout = read_timeout
+        self.request_handle = None
+        self.response_handle = None
+        self._req_fd = None
+        self._buf = b""
+        self.request_pipe = f'/tmp/balatro_request_{worker_id}'
+        self.response_pipe = f'/tmp/balatro_response_{worker_id}'
+        self.create_pipes()
+
+    def connect(self, timeout: float = 120.0) -> None:
+        """Open both FIFO ends once the game process has opened its side."""
+        self.cleanup_handles()
+        # O_RDWR keeps our own writer on the request FIFO: open never blocks and reads never hit EOF
+        self._req_fd = os.open(self.request_pipe, os.O_RDWR)
+        self._buf = b""
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                res_fd = os.open(self.response_pipe, os.O_WRONLY | os.O_NONBLOCK)
+                break
+            except OSError as e:
+                if e.errno != errno.ENXIO:
+                    raise
+            if not self.alive_check():
+                raise RuntimeError(f"Worker {self.worker_id}: game exited before connecting")
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"Worker {self.worker_id}: game did not connect within {timeout}s")
+            time.sleep(0.1)
+        os.set_blocking(res_fd, True)
+        self.response_handle = os.fdopen(res_fd, 'w', encoding='utf-8')
+        self.logger.info(f"Worker {self.worker_id}: Balatro connected")
+
+    def wait_for_request(self) -> Optional[Dict[str, Any]]:
+        if self._req_fd is None:
+            return None
+        deadline = time.monotonic() + self.read_timeout
+        while b"\n" not in self._buf:
+            ready, _, _ = select.select([self._req_fd], [], [], self.POLL_SECS)
+            if ready:
+                self._buf += os.read(self._req_fd, 65536)
+                continue
+            if not self.alive_check():
+                self.logger.error(f"Worker {self.worker_id}: game process died")
+                return None
+            if time.monotonic() > deadline:
+                self.logger.error(f"Worker {self.worker_id}: no request for {self.read_timeout}s (hung)")
+                return None
+        line, self._buf = self._buf.split(b"\n", 1)
+        try:
+            return json.loads(line.decode("utf-8"))
+        except json.JSONDecodeError as e:
+            self.logger.error(f"Worker {self.worker_id}: invalid JSON in request: {e}")
+            return None
+
+    def send_response(self, response_data: Dict[str, Any]) -> bool:
+        try:
+            return super().send_response(response_data)
+        except BrokenPipeError:
+            return False
+
+    def cleanup_handles(self):
+        super().cleanup_handles()
+        if self._req_fd is not None:
+            try:
+                os.close(self._req_fd)
+            except OSError:
+                pass
+            self._req_fd = None

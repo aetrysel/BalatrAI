@@ -18,7 +18,7 @@ LOVELY_LOG_PATH = Path(os.environ.get(
     "BALATRO_LOVELY_LOG",
     Path.home() / ".local/share/love/Balatro/lovely.log"
 ))
-from ..utils.communication import BalatroPipeIO, BalatroSocketIO
+from ..utils.communication import BalatroPipeIO, BalatroSocketIO, ManagedPipeIO
 from .reward import BalatroRewardCalculator
 from ..utils.mappers import BalatroStateMapper, BalatroActionMapper
 from ..utils.replay import ReplaySystem
@@ -40,7 +40,8 @@ class BalatroEnv(gym.Env):
     without knowing about the underlying pipe communication system.
     """
     
-    def __init__(self, seed=None, deck="Red Deck", is_endless=False, stake: str = "White", run_label: str = "", run_dir: str = ""):
+    def __init__(self, seed=None, deck="Red Deck", is_endless=False, stake: str = "White", run_label: str = "", run_dir: str = "",
+                 worker_id=None, instance=None, read_timeout: float = 300.0):
         super().__init__()
         self.logger = logging.getLogger(__name__)
         self.current_state = None
@@ -53,8 +54,18 @@ class BalatroEnv(gym.Env):
         self.is_endless = is_endless
         self.stake = stake
 
+        # Parallel training: worker_id scopes pipes/logs; instance is a BalatroInstance this env launches and restarts
+        self.worker_id = worker_id
+        self.instance = instance
+        self.needs_restart = False
+
         # Initialize communication system — swap transport based on env var
-        if os.getenv("BALATRO_COMM_MODE") == "socket":
+        if instance is not None:
+            self.logger.info(f"Using managed pipe communication (worker {worker_id})")
+            self.pipe_io = ManagedPipeIO(worker_id, alive_check=instance.is_alive, read_timeout=read_timeout)
+            instance.start()
+            self.pipe_io.connect()
+        elif os.getenv("BALATRO_COMM_MODE") == "socket":
             self.logger.info("Using socket communication")
             self.pipe_io = BalatroSocketIO(port=int(os.getenv("BALATRO_SOCKET_PORT", 9000)))
         else:
@@ -66,10 +77,12 @@ class BalatroEnv(gym.Env):
 
         # Replay System
         self.replay_system = ReplaySystem()
+        if worker_id is not None:
+            self.replay_system.REPLAY_FILE_PATH = f"replays_w{worker_id}.json"
         self.actions_taken = []
 
         # History logger
-        self.history_logger = HistoryLogger(run_label=run_label)
+        self.history_logger = HistoryLogger(run_label=f"{run_label}_w{worker_id}" if worker_id is not None else run_label)
         self._episode_count = 0
         self.run_dir = Path(run_dir) if run_dir else None
 
@@ -132,7 +145,9 @@ class BalatroEnv(gym.Env):
         self._episode_accumulated_reward = 0.0
         self.joker_tenure = {}  # joker sort_id → blinds cleared while held
         
-        if self.restart_pending:
+        if self.needs_restart:
+            self._restart_instance()
+        elif self.restart_pending:
             self.restart_pending = False
             restart_response = {"action": 6, "params": [], "seed": self.seed, "deck": self.deck}
             self.pipe_io.send_response(restart_response)
@@ -142,7 +157,7 @@ class BalatroEnv(gym.Env):
         self._episode_count += 1
 
         # Copy lovely.log from the previous episode before it gets overwritten
-        if self._episode_count > 1 and self.run_dir and LOVELY_LOG_PATH.exists():
+        if self._episode_count > 1 and self.run_dir and self.instance is None and LOVELY_LOG_PATH.exists():
             try:
                 dest = self.run_dir / f"lovely_ep{self._episode_count - 1}.log"
                 shutil.copy2(LOVELY_LOG_PATH, dest)
@@ -151,6 +166,11 @@ class BalatroEnv(gym.Env):
 
         # Wait for initial request from Balatro (game start)
         initial_request = self.pipe_io.wait_for_request()
+        restart_attempts = 0
+        while not initial_request and self.instance is not None and restart_attempts < 3:
+            restart_attempts += 1
+            self._restart_instance()
+            initial_request = self.pipe_io.wait_for_request()
         if not initial_request:
             raise RuntimeError("Failed to receive initial request from Balatro")
 
@@ -212,6 +232,8 @@ class BalatroEnv(gym.Env):
         self.actions_taken.append(response_data)
         success = self.pipe_io.send_response(response_data)
         if not success:
+            if self.instance is not None:
+                return self._instance_lost()
             raise RuntimeError("Failed to send response to Balatro")
 
         # Win detected from ROUND_EVAL state (game_win=1 only set there)
@@ -271,6 +293,8 @@ class BalatroEnv(gym.Env):
 
         # Wait for next request with new game state
         next_request = self.pipe_io.wait_for_request()
+        if not next_request and self.instance is not None:
+            return self._instance_lost()
         if not next_request:
             self.game_over = True
             observation = self.state_mapper.process_game_state(self.current_state)
@@ -396,14 +420,37 @@ class BalatroEnv(gym.Env):
             joker['rounds_held'] = rounds
         self.joker_tenure = held
 
+    def _instance_lost(self):
+        """Managed instance crashed or hung: end the episode as truncated; reset() relaunches the game."""
+        self.logger.error(f"Worker {self.worker_id}: instance lost, will restart on reset")
+        self.needs_restart = True
+        self.restart_pending = False
+        self.history_logger.log_episode_end(self._episode_accumulated_reward, self.reward_calculator.episode_reward_breakdown)
+        observation = self.state_mapper.process_game_state(self.current_state)
+        return observation, 0.0, False, True, {"instance_lost": True, "worker_id": self.worker_id}
+
+    def _restart_instance(self):
+        self.needs_restart = False
+        self.restart_pending = False
+        self.instance.restart()
+        self.pipe_io.connect()
+
     def cleanup(self):
         """
         Clean up environment resources
 
         Call this when shutting down to clean up pipe communication.
         """
+        if getattr(self, "_closed", False):
+            return
+        self._closed = True
         self.pipe_io.cleanup()
         self.history_logger.close()
+        if self.instance is not None:
+            self.instance.stop()
+
+    def close(self):
+        self.cleanup()
 
     # Action Masks for MaskablePPO and for ActionWrapper
     def action_masks(self):
