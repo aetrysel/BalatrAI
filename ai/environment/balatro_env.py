@@ -248,6 +248,7 @@ class BalatroEnv(gym.Env):
                 "run_stats": current_gs.get('run_stats', {}),
                 "reward_stats": self.reward_calculator.episode_stats(),
                 "action_taken": response_data.get('action', 0),
+                **self._metric_fields(current_gs),
             }
             if not self.is_endless:
                 # Non-endless: Lua WIN auto-skip handles 30s screen then restart
@@ -316,6 +317,7 @@ class BalatroEnv(gym.Env):
                 "run_stats": last_gs.get('run_stats', {}),
                 "reward_stats": self.reward_calculator.episode_stats(),
                 "action_taken": response_data.get('action', 0),
+                **self._metric_fields(last_gs),
             }
         while next_request.get('game_state', {}).get('state') == 4:
             self.logger.info("Auto-handling START_RUN state, sending restart")
@@ -366,6 +368,7 @@ class BalatroEnv(gym.Env):
             "run_stats": game_state.get('run_stats', {}),
             "reward_stats": self.reward_calculator.episode_stats(),
             "action_taken": response_data.get('action', 0),
+            **self._metric_fields(game_state),
         }
 
         # Create action mask for MaskablePPO
@@ -379,6 +382,15 @@ class BalatroEnv(gym.Env):
 
         self.history_logger.log_step(self.prev_state, response_data, next_request)
         return observation, reward, terminated, truncated, info
+
+    @staticmethod
+    def _metric_fields(game_state: dict) -> dict:
+        """Extra info fields used only by BalatroMetricsCallback."""
+        return {
+            "state": game_state.get('state', 0),
+            "blind_name": game_state.get('blind_name', 'None'),
+            "shop_items": (game_state.get('shop') or {}).get('items', []),
+        }
 
     def _annotate_joker_tenure(self, request):
         """Set rounds_held on each joker in request; increments when a blind clear begins."""

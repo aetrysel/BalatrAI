@@ -42,6 +42,11 @@ before = "main.lua"
 name = "ai"
 [[patches]]
 [patches.module]
+source = "stats.lua"
+before = "main.lua"
+name = "stats"
+[[patches]]
+[patches.module]
 source = "dkjson.lua"
 before = "main.lua"
 name = "dkjson"

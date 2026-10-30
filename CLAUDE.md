@@ -50,7 +50,7 @@ balatro-rl/
 
 ### Lovely Patching System
 The mod uses `RLBridge/lovely/` to define patches:
-- `init.toml` — injects all 8 Lua modules, hooks `G:start_up()`, patches animation skipping
+- `init.toml` — injects all 9 Lua modules (incl. `stats.lua`), hooks `G:start_up()`, patches animation skipping
 - `ai.toml` — hooks `G:update(dt)` to call `AI.update()` every frame
 - Any additional patch can be created by adding a `.toml` file in the lovely dir
 

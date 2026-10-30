@@ -38,6 +38,7 @@ end
 --- @return nil
 function AI.init()
     communication.init()
+    require("stats").install()
 
     -- Hook into Love2D keyboard events
     if love and love.keypressed then

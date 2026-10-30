@@ -3,6 +3,7 @@
 
 local O = {}
 local utils = require("utils")
+local stats = require("stats")
 
 local last_hand_info = { handname = "None", score = 0 }
 local last_blind_name = "None"
@@ -75,6 +76,7 @@ function O.get_run_stats()
     local game = G.GAME
     local rs = game and game.round_scores
     local usage = game and game.consumeable_usage_total
+    local run_counters = stats.get()
     return {
         high_score = rs and rs.hand and rs.hand.amt or 0,
         rerolls = rs and rs.times_rerolled and rs.times_rerolled.amt or 0,
@@ -85,6 +87,8 @@ function O.get_run_stats()
         unused_discards = game and game.unused_discards or 0,
         deck_size = G.playing_cards and #G.playing_cards or 0,
         consumable_usage = O.get_consumable_usage(),
+        tags = run_counters.tags,
+        packs = run_counters.packs,
     }
 end
 
