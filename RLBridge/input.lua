@@ -474,6 +474,16 @@ function I.cash_out()
         return { success = false, error = "Game not available" }
     end
 
+    -- Non-endless win: start a new run instead of cashing out into the ante 9 shop
+    if utils.is_game_won_round_eval() and not utils.get_run_config().endless then
+        utils.log_input("cash_out on win (non-endless) — returning to menu for a new run")
+        if G.OVERLAY_MENU then
+            G.FUNCS.exit_overlay_menu()
+        end
+        G.FUNCS.go_to_menu()
+        return { success = true }
+    end
+
     local ok, err = pcall(function()
         G.FUNCS.cash_out({ config = {} })
     end)

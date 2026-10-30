@@ -43,8 +43,9 @@ balatro-rl/
 │       └── debug.py             # Timestamped print helpers
 ├── balatro-source-code/ # Decompiled Balatro source — reference only, do not edit
 ├── models/             # Saved model checkpoints (run_N_YYYYMMDD_HHMMSS/)
-├── game_history_logs/  # Per-session human-readable logs from history_logger
-└── tensorboard_logs/   # TensorBoard event files
+├── logs/               # Log groups: NNN_name/{tensorboard,history}/ (one group per feature change)
+├── game_history_logs/  # Legacy per-session history logs (pre log groups)
+└── tensorboard_logs/   # Legacy TensorBoard event files (pre log groups)
 ```
 
 ### Lovely Patching System
@@ -89,12 +90,18 @@ Key packages: `gymnasium`, `stable-baselines3`, `sb3-contrib` (MaskablePPO), `to
 python -m ai.train_balatro
 ```
 
-Interactive prompts will ask:
-1. **Seed choice**: `0` = training seed (JFKGEEMG), `1` = test seed (FK76PMFU), `2` = random
-2. **Resume or fresh**: pick an existing `models/run_N_*` directory or start a new run
-3. Start Balatro, then press `R` in-game to activate the RL loop
+All prompts come before "Press Enter to start training". The first launch asks for every setting; later launches load `ai/config/last_session.json` and show a settings menu — press Enter to reuse everything, or type option numbers (e.g. `1 6`) to change only those:
+1. **Seed** (named seeds in `ai/config/seeds.json`, or random)
+2. **Deck**, 3. **Training steps** (additional steps when resuming), 4. **Endless**, 5. **Debug mode** (`n_steps=128`)
+6. **Model**: resume the latest checkpoint of a `models/run_N_*` dir, or start a new run
+7. **Log group**: an existing `logs/NNN_name/` (default: latest) or a new one (number auto-increments)
+8. **TB session** (resumed runs only): append to an existing session of that run, or start a new one
 
-Training saves checkpoints to `models/run_N_YYYYMMDD_HHMMSS/` and TensorBoard logs to `tensorboard_logs/`.
+Then start Balatro and press `R` in-game to activate the RL loop.
+
+Checkpoints go to `models/run_N_YYYYMMDD_HHMMSS/`. Each session writes `logs/NNN_name/tensorboard/<session>/` and `logs/NNN_name/history/history_<session>.log`, where `<session>` = `YYYYMMDD_HHMMSS_run_N` (timestamp first so sessions sort chronologically). Appending to a session keeps one continuous TensorBoard curve (`reset_num_timesteps=False`) and appends to its history log. Point TensorBoard at a group: `tensorboard --logdir logs/NNN_name/tensorboard`.
+
+Endless/seed/deck are passed to the mod via the run config file (`/tmp/balatro_run_config.json`, or `%APPDATA%/Balatro/Mods/RLBridge/run_config.json` on Windows), read by `UTIL.get_run_config()`. On the ante 8 win the mod dismisses the win overlay and keeps playing (endless) or returns to the menu to start a new run.
 
 ## Key Implementation Details
 

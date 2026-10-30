@@ -64,7 +64,7 @@ function O.get_game_state()
         pack_cards = O.get_pack_cards(),
         pack_choices = G.GAME and G.GAME.pack_choices or 0,
         deck_cards = O.get_deck_cards(),
-        auto_endless_config = auto_endless,
+        auto_endless_config = utils.get_run_config().endless or false,
         shop = { items = O.get_shop_items() },
         run_stats = O.get_run_stats(),
     }

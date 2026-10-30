@@ -257,4 +257,46 @@ function UTIL.is_event_queue_empty()
     return true
 end
 
+local run_config_cache = nil
+
+--- Read the run config written by train_balatro.py ({seed, deck, endless})
+--- Cached after the first read; pass reload=true to re-read the file (done on each START_RUN)
+--- @param reload boolean|nil Force a re-read from disk
+--- @return table Config table (empty if the file is missing or invalid)
+function UTIL.get_run_config(reload)
+    if run_config_cache and not reload then
+        return run_config_cache
+    end
+    local paths = { "/tmp/balatro_run_config.json" }
+    local appdata = os.getenv("APPDATA")
+    if appdata then
+        table.insert(paths, 1, appdata .. "/Balatro/Mods/RLBridge/run_config.json")
+    end
+    run_config_cache = {}
+    for _, path in ipairs(paths) do
+        local f = io.open(path, "r")
+        if f then
+            local dkjson = require("dkjson")
+            local config = dkjson.decode(f:read("*all"))
+            f:close()
+            if type(config) == "table" then
+                run_config_cache = config
+                break
+            end
+        end
+    end
+    return run_config_cache
+end
+
+--- True when the ante 8 boss has just been defeated (same condition output.lua reports as game_win)
+--- @return boolean
+function UTIL.is_game_won_round_eval()
+    if G.STATE ~= G.STATES.ROUND_EVAL then
+        return false
+    end
+    local ante = G.GAME and G.GAME.round_resets and G.GAME.round_resets.ante or 0
+    local blind_states = G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_states
+    return ante == 9 and blind_states and blind_states.Boss == "Defeated" or false
+end
+
 return UTIL
