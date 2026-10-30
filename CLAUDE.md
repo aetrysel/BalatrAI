@@ -254,6 +254,22 @@ Four components (summed every step):
 
 Step total clipped to [−30, +120]. No `VecNormalize`; SB3 normalizes advantages per batch.
 
+### TensorBoard Metrics (`ai/utils/callbacks.py`)
+Everything is recorded once per rollout (policy update). `<metric>` = all-time in this training process; `<metric>_rollout` = episodes that ended during the last rollout. Rates/ratios are ratio-of-sums (`Σnum / max(1, Σden)`), `mean_*_rollout` are per-episode averages. No per-episode metrics. Categories are kept ≤12 cards; per-object categories are exempt.
+
+| Category | Contents |
+|---|---|
+| `progress/` | episodes, ante_8_boss_wins, win_rate, best/mean ante + round |
+| `ante_reached/` | episodes reaching ante 2–8 |
+| `blinds/` | clears, boss clears, skips, clear/boss/skip rates, mean_hands_per_clear, deadliest_death_rate |
+| `first_blind/` | ante 1 round 1 clears and one-shots (+ rates) |
+| `scoring/`, `hand_play/`, `money/`, `shop/` | scores; plays/discards/deck size; gold earned/spent/held; visits, rerolls, voucher purchase rate |
+| `boosters/`, `tags/` | packs bought/opened/free/picked/skipped + buy:skip, pick:skip; tags acquired by source (skip/double/anaglyph/diet_cola) |
+| `jokers/`, `joker_tenure/`, `consumables/` | gained/purchased/sold/end count + buy:sell, gain:sell; rounds held; used/failed/sold + rates |
+| Per-object | `blind_by_name/`, `voucher_by_name/`, `booster_by_type/`, `tag_by_name/`, `joker_by_name/`, `hand_<type>/`, `consumable_<type>/` |
+
+Tag and booster counts come from `RLBridge/stats.lua` (read-only wrappers on `add_tag`, `skip_blind`, `Card:open`, `use_card`, `skip_booster`), exported in `run_stats.tags` / `run_stats.packs`. The deadliest blind's name is printed in the policy-update CLI line.
+
 ## Communication with Claude
 - Please keep chats as efficient as possible and brief. No fluff talk, just get to the point
 - Please do NOT remove existing comments from the code
