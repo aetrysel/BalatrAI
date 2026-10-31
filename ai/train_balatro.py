@@ -181,23 +181,33 @@ def write_run_config(seed: str | None, deck: str, endless: bool) -> None:
 # --- Run directory helpers (unchanged) ---
 
 def get_next_run_number(models_dir: Path) -> int:
-    """Scan existing run_N_* directories and return the next run number."""
-    existing = [d for d in models_dir.iterdir() if d.is_dir() and d.name.startswith("run_")]
+    """Scan existing NNN_* and legacy run_N_* directories and return the next run number."""
     nums = []
-    for d in existing:
+    for d in models_dir.iterdir():
+        if not d.is_dir():
+            continue
         parts = d.name.split("_")
-        if len(parts) >= 2:
-            try:
-                nums.append(int(parts[1]))
-            except ValueError:
-                pass
+        token = parts[1] if d.name.startswith("run_") and len(parts) >= 2 else parts[0]
+        try:
+            nums.append(int(token))
+        except ValueError:
+            pass
     return max(nums, default=0) + 1
 
 
-def run_number(run_dir_name: str) -> str:
-    """'run_29_20261029_125706' → '29'."""
-    parts = run_dir_name.split("_")
-    return parts[1] if len(parts) >= 2 else "0"
+def sanitize_name(name: str, fallback: str) -> str:
+    """'My cool run!' → 'My_cool_run'."""
+    return "_".join("".join(c if c.isalnum() or c in "-_" else " " for c in name).split()) or fallback
+
+
+def make_run_name(run_num: int, name: str) -> str:
+    """Shared name for the model dir, TB entry and history logs: NNN_Custom_Name_YYYYMMDD_HHMMSS."""
+    return f"{run_num:03d}_{sanitize_name(name, 'run')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+
+def is_run_dir(d: Path) -> bool:
+    """models/ subdir that holds a run: NNN_name_ts or legacy run_N_ts."""
+    return d.is_dir() and (d.name.startswith("run_") or d.name[:3].isdigit())
 
 
 def latest_checkpoint(run_dir: Path) -> Path | None:
@@ -217,7 +227,7 @@ def pick_run_to_resume(models_dir: Path):
     Returns (None, None) if the user cancels.
     """
     run_dirs = sorted(
-        [d for d in models_dir.iterdir() if d.is_dir() and d.name.startswith("run_")],
+        [d for d in models_dir.iterdir() if is_run_dir(d)],
         key=lambda d: d.stat().st_mtime,
         reverse=True,
     )
@@ -234,7 +244,7 @@ def pick_run_to_resume(models_dir: Path):
     print("\n📂 Available runs:")
     for i, (run_dir, ckpt) in enumerate(runs_with_checkpoints):
         print(f"  [{i + 1}] {run_dir.name}  (latest: {ckpt.name})")
-    print(f"  [0] Cancel — start fresh instead")
+    print(f"  [0] Cancel")
 
     while True:
         choice = input("Select run to resume: ").strip()
@@ -250,20 +260,45 @@ def pick_run_to_resume(models_dir: Path):
         print(f"  Enter a number between 0 and {len(runs_with_checkpoints)}")
 
 
-def select_resume_run(models_dir: Path) -> str | None:
-    """Ask whether to resume; returns the chosen models/run_* dir name, or None for a fresh run."""
-    has_runs = any(latest_checkpoint(d) for d in models_dir.iterdir()
-                   if d.is_dir() and d.name.startswith("run_"))
-    if not has_runs:
-        print("No checkpoints found — starting a fresh run.")
-        return None
-    if input("Resume from previous training? (y/N): ").strip().lower() != "y":
-        return None
-    _, run_dir = pick_run_to_resume(models_dir)
-    if run_dir is None:
-        print("No run selected, starting fresh.")
-        return None
-    return run_dir.name
+def select_model(models_dir: Path) -> tuple[str | None, str]:
+    """
+    New named run or continue a prior one.
+    Returns (resume_run_dir_name, "") to continue, or (None, custom_name) for a new run.
+    """
+    has_runs = any(latest_checkpoint(d) for d in models_dir.iterdir() if is_run_dir(d))
+    while True:
+        print("\nModel:")
+        print("  [N] New named run")
+        if has_runs:
+            print("  [C] Continue a prior run")
+        choice = input("Select (default: N): ").strip().upper()
+        if choice in ("", "N"):
+            name = input("  Run name: ").strip()
+            print(f"  → models/{make_run_name(get_next_run_number(models_dir), name)}  (timestamp set at launch)")
+            return None, sanitize_name(name, "run")
+        if choice == "C" and has_runs:
+            _, run_dir = pick_run_to_resume(models_dir)
+            if run_dir is not None:
+                return run_dir.name, ""
+            continue
+        print("  Invalid choice.")
+
+
+def find_run_log_group(run_name: str) -> str | None:
+    """Log group that already holds this run's TensorBoard entry (latest group if several)."""
+    groups = [g for g in list_log_groups(LOGS_ROOT) if (g / "tensorboard" / run_name).is_dir()]
+    return groups[-1].name if groups else None
+
+
+def next_session_number(run_name: str) -> int:
+    """Next history session number for a run, scanning every log group's history/ dir."""
+    nums = []
+    for path in LOGS_ROOT.glob(f"*/history/{run_name}_session_*.log"):
+        try:
+            nums.append(int(path.stem.rsplit("_", 1)[1]))
+        except (IndexError, ValueError):
+            pass
+    return max(nums, default=0) + 1
 
 
 # --- Log groups: logs/NNN_name/{tensorboard,history}/ ---
@@ -278,15 +313,14 @@ def list_log_groups(logs_root: Path) -> list[Path]:
 def create_log_group(logs_root: Path, name: str) -> Path:
     """Create logs/NNN_name with tensorboard/ and history/ subdirs, numbered after the latest group."""
     nums = [int(d.name[:3]) for d in list_log_groups(logs_root)]
-    safe = "_".join("".join(c if c.isalnum() or c in "-_" else " " for c in name).split()) or "logs"
-    group = logs_root / f"{max(nums, default=0) + 1:03d}_{safe}"
+    group = logs_root / f"{max(nums, default=0) + 1:03d}_{sanitize_name(name, 'logs')}"
     (group / "tensorboard").mkdir(parents=True, exist_ok=True)
     (group / "history").mkdir(parents=True, exist_ok=True)
     return group
 
 
-def select_log_group(logs_root: Path) -> str:
-    """Pick an existing log group (default: latest) or create a new one. Returns the group dir name."""
+def select_log_group(logs_root: Path, default: str | None = None) -> str:
+    """Pick an existing log group (default: given group, else latest) or create a new one. Returns the group dir name."""
     groups = list_log_groups(logs_root)
     print("\nLog group (holds TensorBoard + history logs for one feature change):")
     if not groups:
@@ -297,7 +331,7 @@ def select_log_group(logs_root: Path) -> str:
     for i, g in enumerate(groups):
         print(f"  [{i + 1}] {g.name}")
     print(f"  [N] New log group")
-    default = groups[-1].name if groups else None
+    default = default or (groups[-1].name if groups else None)
     while True:
         prompt = f"Select log group (default: {default}): " if default else "Select log group: "
         choice = input(prompt).strip().upper()
@@ -317,38 +351,6 @@ def select_log_group(logs_root: Path) -> str:
         print("  Invalid choice.")
 
 
-def list_sessions(group_dir: Path, run_num: str) -> list[str]:
-    """TensorBoard sessions in a log group that belong to models/run_<run_num>_*, oldest first."""
-    tb_dir = group_dir / "tensorboard"
-    if not tb_dir.exists():
-        return []
-    return sorted(d.name for d in tb_dir.iterdir() if d.is_dir() and d.name.endswith(f"_run_{run_num}"))
-
-
-def select_session(group_dir: Path, run_num: str) -> str | None:
-    """Pick an existing session of this run to append to (default: latest), or None for a new session."""
-    sessions = list_sessions(group_dir, run_num)
-    if not sessions:
-        return None
-    print(f"\nTensorBoard session for run_{run_num} in {group_dir.name}:")
-    for i, s in enumerate(sessions):
-        print(f"  [{i + 1}] Append to {s}")
-    print(f"  [N] New session")
-    while True:
-        choice = input(f"Select session (default: append to {sessions[-1]}): ").strip().upper()
-        if choice == "":
-            return sessions[-1]
-        if choice == "N":
-            return None
-        try:
-            idx = int(choice) - 1
-            if 0 <= idx < len(sessions):
-                return sessions[idx]
-        except ValueError:
-            pass
-        print("  Invalid choice.")
-
-
 # --- Settings menu (persisted between launches) ---
 
 SETTING_LABELS = [
@@ -359,7 +361,6 @@ SETTING_LABELS = [
     ("debug",          "Debug mode"),
     ("resume_run",     "Model"),
     ("log_group",      "Log group"),
-    ("tb_session",     "TB session"),
 ]
 
 
@@ -389,11 +390,6 @@ def validate_settings(settings: dict) -> dict:
     if group and not (LOGS_ROOT / group).is_dir():
         print(f"⚠️  Saved log group '{group}' not found.")
         settings["log_group"] = None
-    session = settings.get("tb_session")
-    if session and (not settings.get("resume_run") or not settings.get("log_group")
-                    or session not in list_sessions(LOGS_ROOT / settings["log_group"],
-                                                    run_number(settings["resume_run"]))):
-        settings["tb_session"] = None
     return settings
 
 
@@ -408,13 +404,9 @@ def format_setting(key: str, settings: dict, seeds: list) -> str:
         return "ON" if value else "OFF"
     if key == "resume_run":
         if not value:
-            return "new run"
+            return f"new run '{settings.get('new_run_name') or 'run'}'"
         ckpt = latest_checkpoint(MODELS_DIR / value)
-        return f"resume {value} ({ckpt.name if ckpt else 'no checkpoint'})"
-    if key == "tb_session":
-        if not settings.get("resume_run"):
-            return "new session"
-        return f"append to {value}" if value else "new session"
+        return f"continue {value} ({ckpt.name if ckpt else 'no checkpoint'})"
     return str(value)
 
 
@@ -431,22 +423,15 @@ def edit_setting(key: str, settings: dict, seeds: list) -> list:
     elif key == "debug":
         settings["debug"] = select_debug_mode()
     elif key == "resume_run":
-        settings["resume_run"] = select_resume_run(MODELS_DIR)
-        settings["tb_session"] = None
-        if settings["resume_run"] and settings.get("log_group"):
-            edit_setting("tb_session", settings, seeds)
+        settings["resume_run"], settings["new_run_name"] = select_model(MODELS_DIR)
+        # Continuing a run defaults to the log group that already holds its TB entry
+        existing_group = settings["resume_run"] and find_run_log_group(settings["resume_run"])
+        if existing_group and existing_group != settings.get("log_group"):
+            print(f"  Log group → {existing_group} (holds this run's TensorBoard entry)")
+            settings["log_group"] = existing_group
     elif key == "log_group":
-        settings["log_group"] = select_log_group(LOGS_ROOT)
-        settings["tb_session"] = None
-        if settings.get("resume_run"):
-            edit_setting("tb_session", settings, seeds)
-    elif key == "tb_session":
-        if not settings.get("resume_run"):
-            print("  A new run always starts a new TensorBoard session.")
-            settings["tb_session"] = None
-        else:
-            settings["tb_session"] = select_session(LOGS_ROOT / settings["log_group"],
-                                                    run_number(settings["resume_run"]))
+        default = settings.get("resume_run") and find_run_log_group(settings["resume_run"])
+        settings["log_group"] = select_log_group(LOGS_ROOT, default=default)
     return seeds
 
 
@@ -456,7 +441,7 @@ def configure_session(seeds: list) -> tuple[dict, list]:
     Returns (settings, seeds).
     """
     defaults = {"seed": None, "deck": DECK_NAMES[0], "training_steps": DEFAULT_TRAINING_STEPS,
-                "endless": False, "debug": False, "resume_run": None, "log_group": None, "tb_session": None}
+                "endless": False, "debug": False, "resume_run": None, "new_run_name": "run", "log_group": None}
     saved = load_last_settings()
     if saved is None:
         settings = dict(defaults)
@@ -509,10 +494,10 @@ def mask_fn(env):
 
 
 def create_environment(seed=None, deck="Red Deck", is_endless=False, run_label: str = "", run_dir: str = "",
-                       history_dir: str = "game_history_logs", history_append: bool = False):
+                       history_dir: str = "game_history_logs"):
     """Create and wrap the Balatro environment"""
     env = BalatroEnv(seed=seed, deck=deck, is_endless=is_endless, run_label=run_label, run_dir=run_dir,
-                     history_dir=history_dir, history_append=history_append)
+                     history_dir=history_dir)
     env = ActionMasker(env, mask_fn)
     env = Monitor(env, filename="training_monitor.csv")
     return env
@@ -569,7 +554,7 @@ def create_callbacks(save_freq=1000, checkpoint_dir="./models/"):
     return callbacks
 
 
-def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resume_from=None, checkpoint_dir="./models/", seed=None, deck="Red Deck", is_endless=False, run_label: str = "", n_steps: int = 4096, tb_session_dir: str = "./tensorboard_logs/MaskablePPO", run_dir: str = "", history_dir: str = "game_history_logs", history_append: bool = False):
+def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resume_from=None, checkpoint_dir="./models/", seed=None, deck="Red Deck", is_endless=False, run_label: str = "", n_steps: int = 4096, tb_session_dir: str = "./tensorboard_logs/MaskablePPO", run_dir: str = "", history_dir: str = "game_history_logs"):
     """
     Main training function
 
@@ -582,7 +567,6 @@ def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resu
         deck: Deck name string
         tb_session_dir: Exact TensorBoard run directory (appended to if it already exists)
         history_dir: Directory for the history log of this session
-        history_append: Append to an existing history log instead of overwriting
     """
     logger = logging.getLogger(__name__)
     logger.info(f"Starting Balatro RL training with MaskablePPO")
@@ -590,7 +574,7 @@ def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resu
 
     try:
         env = create_environment(seed=seed, deck=deck, is_endless=is_endless, run_label=run_label, run_dir=run_dir,
-                                 history_dir=history_dir, history_append=history_append)
+                                 history_dir=history_dir)
 
         if resume_from and Path(resume_from).exists():
             logger.info(f"Resuming training from: {resume_from}")
@@ -693,7 +677,6 @@ if __name__ == "__main__":
     # --- All prompts: settings menu (seed, deck, steps, endless, debug, model, log group, TB session) ---
     seeds = load_seeds()
     settings, seeds = configure_session(seeds)
-    save_last_settings(settings)
 
     seed_choice = settings["seed"]
     deck_choice = settings["deck"]
@@ -704,23 +687,23 @@ if __name__ == "__main__":
     # Write config for the Lua mod auto-skip
     write_run_config(seed_choice, deck_choice, is_endless)
 
-    # --- Resolve model + log paths ---
+    # --- Resolve model + log paths (one name shared by model dir, TB entry and history logs) ---
     resume_from = None
     if settings["resume_run"]:
-        run_dir = MODELS_DIR / settings["resume_run"]
-        resume_from = str(latest_checkpoint(run_dir))
-        checkpoint_dir = str(run_dir) + "/"
-        run_num_str = run_number(run_dir.name)
+        run_name = settings["resume_run"]
+        resume_from = str(latest_checkpoint(MODELS_DIR / run_name))
     else:
-        run_num_str = str(get_next_run_number(MODELS_DIR))
-        checkpoint_dir = f"./models/run_{run_num_str}_{datetime.now().strftime('%Y%m%d_%H%M%S')}/"
+        run_name = make_run_name(get_next_run_number(MODELS_DIR), settings["new_run_name"])
+        # Later launches continue this run by default
+        settings["resume_run"] = run_name
+    checkpoint_dir = f"./models/{run_name}/"
+    save_last_settings(settings)
 
     group_dir = LOGS_ROOT / settings["log_group"]
-    history_append = settings["tb_session"] is not None
-    # Session name: timestamp first so sessions sort chronologically; shared by TB dir and history log
-    session_name = settings["tb_session"] or f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_run_{run_num_str}"
-    tb_session_dir = group_dir / "tensorboard" / session_name
+    # Same TB entry every session of a run; history gets a new file per session
+    tb_session_dir = group_dir / "tensorboard" / run_name
     history_dir = group_dir / "history"
+    session_label = f"{run_name}_session_{next_session_number(run_name):02d}"
 
     print(f"\nUsing seed: {seed_choice if seed_choice else '(none — game picks randomly)'}")
     print(f"Using deck: {deck_choice}")
@@ -731,8 +714,8 @@ if __name__ == "__main__":
         print(f"Resuming {Path(checkpoint_dir).name} from {Path(resume_from).name}")
     else:
         print(f"Starting fresh. Checkpoints → {checkpoint_dir}")
-    print(f"TensorBoard → {tb_session_dir}{'  (append)' if history_append else ''}")
-    print(f"History log → {history_dir / f'history_{session_name}.log'}")
+    print(f"TensorBoard → {tb_session_dir}{'  (continuing entry)' if tb_session_dir.exists() else ''}")
+    print(f"History log → {history_dir / f'{session_label}.log'}")
 
     # Train the agent
     print("\n🎮 Starting Balatro RL Training!")
@@ -753,12 +736,11 @@ if __name__ == "__main__":
             seed=seed_choice,
             deck=deck_choice,
             is_endless=is_endless,
-            run_label=session_name,
+            run_label=session_label,
             n_steps=n_steps,
             tb_session_dir=str(tb_session_dir),
             run_dir=checkpoint_dir,
             history_dir=str(history_dir),
-            history_append=history_append,
         )
 
         if model:

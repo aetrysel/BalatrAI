@@ -1,6 +1,6 @@
 """
 History logger — writes a human-readable record of the bot's actions and their effects.
-One log file per training session, stored in the log group's history/ dir and named after its TensorBoard session.
+One log file per training session, stored in the log group's history/ dir as <run name>_session_NN.log.
 Steps are written in real-time; cleared-blinds TOC and money events appear at episode end.
 """
 
@@ -137,14 +137,14 @@ def _hand_primary_feature(hand_name: str, played_cards: list) -> str:
 
 
 class HistoryLogger:
-    def __init__(self, log_dir="game_history_logs", run_label: str = "", append: bool = False):
+    def __init__(self, log_dir="game_history_logs", run_label: str = ""):
         Path(log_dir).mkdir(parents=True, exist_ok=True)
         if run_label:
-            log_path = os.path.join(log_dir, f"history_{run_label}.log")
+            log_path = os.path.join(log_dir, f"{run_label}.log")
         else:
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")
             log_path = os.path.join(log_dir, f"history_{ts}.log")
-        self._file = open(log_path, 'a' if append else 'w', buffering=1)
+        self._file = open(log_path, 'w', buffering=1)
         self.episode = 0
         self._file_line_count = 0
 
