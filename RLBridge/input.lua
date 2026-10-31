@@ -136,6 +136,20 @@ function I.skip_blind()
     return { success = true }
 end
 
+--- Reroll the upcoming Boss Blind (requires Director's Cut or Retcon; costs $10)
+--- @return table Result with success status and optional error message
+function I.reroll_boss()
+    local ok, err = pcall(function()
+        G.FUNCS.reroll_boss({ config = {} })
+    end)
+    if not ok then
+        utils.log_input("reroll_boss ERROR: " .. tostring(err))
+        return { success = false, error = tostring(err) }
+    end
+    utils.log_input("reroll_boss " .. utils.completed_success_msg)
+    return { success = true }
+end
+
 --- Select a hand
 --- Selects the cards based on a table of indexes
 --- @param card_indices table Array of card indices to select

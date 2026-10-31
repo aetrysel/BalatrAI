@@ -74,7 +74,7 @@ class BalatroEnv(gym.Env):
         self.run_dir = Path(run_dir) if run_dir else None
 
         # Action space constants
-        self.MAX_ACTIONS = 19        # actions 0-18 (balatro IDs 1-19)
+        self.MAX_ACTIONS = 20        # actions 0-19 (balatro IDs 1-20)
         self.MAX_CARDS = 8           # binary card selectors
         self.MAX_SHOP_SLOTS = 5      # shared by BUY_JOKER and BUY_BOOSTER
         self.MAX_JOKER_SLOTS = 5     # for SELL_JOKER
@@ -102,7 +102,7 @@ class BalatroEnv(gym.Env):
         ]))
 
         # Observation space
-        self.OBSERVATION_SIZE = 417
+        self.OBSERVATION_SIZE = 440
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
@@ -111,8 +111,8 @@ class BalatroEnv(gym.Env):
         )
 
         # Initialize mappers
-        # Observation action-mask stays 17 bits (actions 18/19 visible only via MultiDiscrete mask)
-        self.state_mapper = BalatroStateMapper(observation_size=self.OBSERVATION_SIZE, max_actions=17)
+        # Observation action-mask covers every action (balatro IDs 1-20)
+        self.state_mapper = BalatroStateMapper(observation_size=self.OBSERVATION_SIZE, max_actions=self.MAX_ACTIONS)
         self.action_mapper = BalatroActionMapper(action_slices=slices)
     
     def reset(self, seed=None, options=None):
@@ -442,7 +442,7 @@ class BalatroEnv(gym.Env):
             1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5,
             7: 6, 8: 7, 9: 8, 10: 9, 11: 10,
             12: 11, 13: 12, 14: 13, 15: 14, 16: 15,
-            17: 16, 18: 17, 19: 18,
+            17: 16, 18: 17, 19: 18, 20: 19,
         }
 
         action_selection_mask = [False] * self.MAX_ACTIONS

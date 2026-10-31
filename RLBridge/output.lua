@@ -4,6 +4,7 @@
 local O = {}
 local utils = require("utils")
 local stats = require("stats")
+local joker_tracker = require("joker_tracker")
 
 local last_hand_info = { handname = "None", score = 0 }
 local last_blind_name = "None"
@@ -89,6 +90,8 @@ function O.get_run_stats()
         consumable_usage = O.get_consumable_usage(),
         tags = run_counters.tags,
         packs = run_counters.packs,
+        joker_upgrades = joker_tracker.upgrades_total(),
+        boss_rerolls = run_counters.boss_rerolls,
     }
 end
 
@@ -182,6 +185,7 @@ function O.get_jokers()
     local jokers = {}
     if G.jokers and G.jokers.cards then
         for i, card in ipairs(G.jokers.cards) do
+            local tracked = joker_tracker.get(card)
             table.insert(jokers, {
                 id = card.sort_id,
                 name = card.config.center.name or "Unknown",
@@ -189,6 +193,13 @@ function O.get_jokers()
                 slot = i,
                 edition = get_edition_str(card),
                 can_sell = utils.is_button_enabled('can_sell_card', card),
+                contribution = tracked.contribution,
+                score_share = tracked.score_ema,
+                value_score = tracked.value_ema,
+                triggered_last_hand = tracked.triggered_last_hand,
+                upgrades = tracked.upgrades,
+                dollars_generated = tracked.dollars_generated,
+                cards_created = tracked.cards_created,
             })
         end
     end
@@ -199,10 +210,14 @@ function O.get_consumables()
     local consumables = {}
     if G.consumeables and G.consumeables.cards then
         for i, card in ipairs(G.consumeables.cards) do
+            local cfg = card.ability and card.ability.consumeable or {}
             table.insert(consumables, {
                 name = card.config.center.name or "Unknown",
                 item_set = (card.config.center.set or "Unknown"),
                 slot = i,
+                -- Hand cards that must be highlighted to use it (0 = no selection needed)
+                max_highlighted = cfg.max_highlighted or 0,
+                min_highlighted = cfg.max_highlighted and (cfg.min_highlighted or 1) or 0,
                 can_use = utils.is_button_enabled('can_use_consumeable', card),
                 can_sell = utils.is_button_enabled('can_sell_card', card),
             })
@@ -241,7 +256,8 @@ function O.get_deck_cards()
     if G.playing_cards then
         for _, card in ipairs(G.playing_cards) do
             local seal = card.seal or "None"
-            local enhancement = (card.ability and card.ability.name) or "Base"
+            -- Center key: "c_base" for plain cards, "m_bonus"/"m_glass"/... for enhancements
+            local enhancement = (card.config and card.config.center and card.config.center.key) or "c_base"
             table.insert(deck_info, {
                 seal = seal,
                 enhancement = enhancement,

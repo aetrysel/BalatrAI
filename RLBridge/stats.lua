@@ -1,5 +1,5 @@
 --- RLBridge stats module
---- Read-only hooks that count per-run events the game doesn't track itself (tags acquired, booster packs)
+--- Read-only hooks that count per-run events the game doesn't track itself (tags acquired, booster packs, boss rerolls)
 --- Counters live on G.GAME.rl_stats so they reset with every new run; exported via output.get_run_stats()
 
 local STATS = {}
@@ -14,6 +14,7 @@ local function run_stats()
     G.GAME.rl_stats = G.GAME.rl_stats or {
         tags = { by_key = {}, by_source = {} },
         packs = {},
+        boss_rerolls = 0,
         pending_double = {},  -- tag key → copies Double Tags have promised but not yet added
     }
     return G.GAME.rl_stats
@@ -23,10 +24,14 @@ local function incr(tbl, key, amount)
     tbl[key] = (tbl[key] or 0) + (amount or 1)
 end
 
+local function pack_entry_by_name(stats, name)
+    stats.packs[name] = stats.packs[name] or { offered = 0, opened = 0, bought = 0, picks = 0, skips = 0 }
+    return stats.packs[name], name
+end
+
 local function pack_entry(stats, card)
     local name = card and card.config and card.config.center and card.config.center.name or "Unknown"
-    stats.packs[name] = stats.packs[name] or { opened = 0, bought = 0, picks = 0, skips = 0 }
-    return stats.packs[name], name
+    return pack_entry_by_name(stats, name)
 end
 
 --- Attribute a tag that is about to be added
@@ -117,6 +122,27 @@ function STATS.install()
         return original_use_card(e, ...)
     end
 
+    -- Shop booster slots are rolled through get_pack('shop_pack') (only caller in the game)
+    local original_get_pack = get_pack
+    get_pack = function(_key, ...)
+        local center = original_get_pack(_key, ...)
+        local stats = run_stats()
+        if stats and _key == 'shop_pack' and center and center.name then
+            local entry = pack_entry_by_name(stats, center.name)
+            entry.offered = (entry.offered or 0) + 1
+        end
+        return center
+    end
+
+    local original_reroll_boss = G.FUNCS.reroll_boss
+    G.FUNCS.reroll_boss = function(e, ...)
+        local stats = run_stats()
+        if stats then
+            stats.boss_rerolls = (stats.boss_rerolls or 0) + 1
+        end
+        return original_reroll_boss(e, ...)
+    end
+
     local original_skip_booster = G.FUNCS.skip_booster
     G.FUNCS.skip_booster = function(e, ...)
         local stats = run_stats()
@@ -129,13 +155,13 @@ function STATS.install()
 end
 
 --- Per-run tag and booster counters for output.get_run_stats()
---- @return table {tags = {by_key, by_source}, packs = {[name] = {opened, bought, picks, skips}}}
+--- @return table {tags = {by_key, by_source}, packs = {[name] = {offered, opened, bought, picks, skips}}, boss_rerolls}
 function STATS.get()
     local stats = run_stats()
     if not stats then
-        return { tags = { by_key = {}, by_source = {} }, packs = {} }
+        return { tags = { by_key = {}, by_source = {} }, packs = {}, boss_rerolls = 0 }
     end
-    return { tags = stats.tags, packs = stats.packs }
+    return { tags = stats.tags, packs = stats.packs, boss_rerolls = stats.boss_rerolls or 0 }
 end
 
 return STATS

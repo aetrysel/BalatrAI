@@ -24,6 +24,10 @@ ANTES_TRACKED = range(2, 9)
 # Minimum attempts before a blind counts toward blinds/deadliest_death_rate
 DEADLIEST_MIN_ATTEMPTS = 5
 SHOP_STATE_ID = 5
+# Per-pack counters from RLBridge/stats.lua (offered = rolled into a shop booster slot)
+PACK_FIELDS = ("offered", "opened", "bought", "picks", "skips")
+# Deck-quality fields from reward_stats (deck_<field> at run end, max_deck_<field> per-run peak)
+DECK_STAT_FIELDS = ("enhanced", "sealed", "editioned", "upgrades", "upgrade_pct")
 
 # Metric layout (all recorded once per rollout, at policy update):
 #   <metric>          all-time value over the whole training process
@@ -60,6 +64,10 @@ class BalatroMetricsCallback(BaseCallback):
         self.joker_sold_counts = defaultdict(int)
         self.joker_rounds_held = defaultdict(list)   # rounds_held when each copy left (sold/destroyed/run end)
         self.joker_max_rounds_held = defaultdict(int)
+        self.joker_contributions = defaultdict(list)  # contribution (0..1) when each copy left
+
+        # Deck quality (reward_stats): all-time best per field
+        self.best_deck_stats = Counter()
 
         # All-time hand type tracking
         self.hand_type_counts = defaultdict(int)
@@ -124,12 +132,14 @@ class BalatroMetricsCallback(BaseCallback):
         self.joker_rounds_held[key].append(rounds)
         self.joker_max_rounds_held[key] = max(self.joker_max_rounds_held[key], rounds)
         self.max_joker_rounds_held = max(self.max_joker_rounds_held, rounds)
+        self.joker_contributions[key].append(float(joker.get("contribution", 0.0)))
         self._add("joker_holds")
         self._add("joker_hold_rounds", rounds)
         self.episode_joker_holds.append(rounds)
         if sold:
             self.joker_sold_counts[key] += 1
             self._add("jokers_sold")
+            self._add("sold_joker_contribution", float(joker.get("contribution", 0.0)))
 
     def _win_pct(self):
         if self.totals["episodes"] == 0:
@@ -334,7 +344,16 @@ class BalatroMetricsCallback(BaseCallback):
         self._add("rerolls", run_stats.get("rerolls", 0))
         self._add("unused_discards", run_stats.get("unused_discards", 0))
         self._add("fresh_joker_sells", reward_stats.get("fresh_joker_sells", 0))
+        self._add("joker_upgrades", run_stats.get("joker_upgrades", 0))
+        self._add("boss_rerolls", run_stats.get("boss_rerolls", 0))
+        self._add("boosters_bought_skipped", reward_stats.get("boosters_bought_skipped", 0))
+        self._add("pb_hand_bonuses", reward_stats.get("pb_hand_bonuses", 0))
         self.rollout_values["run_best_hand"].append(run_stats.get("high_score", 0))
+
+        # Deck quality at run end (rollout mean) and per-run peak (all-time best)
+        for field in DECK_STAT_FIELDS:
+            self.rollout_values[f"deck_{field}"].append(reward_stats.get(f"deck_{field}", 0))
+            self.best_deck_stats[field] = max(self.best_deck_stats[field], reward_stats.get(f"max_deck_{field}", 0))
         self.rollout_values["shop_exit_gold"].append(reward_stats.get("mean_shop_exit_gold", 0.0))
         deck_size = run_stats.get("deck_size", 0)
         self.rollout_values["final_deck_size"].append(deck_size)
@@ -355,7 +374,7 @@ class BalatroMetricsCallback(BaseCallback):
         packs = run_stats.get("packs") or {}
         for name, counts in (packs.items() if isinstance(packs, dict) else []):
             pack_key = self._joker_key(name)
-            for field in ("opened", "bought", "picks", "skips"):
+            for field in PACK_FIELDS:
                 value = counts.get(field, 0)
                 self.pack_stats_by_type[pack_key][field] += value
                 self._add(f"packs_{field}", value)
@@ -609,6 +628,13 @@ class BalatroMetricsCallback(BaseCallback):
         self.logger.record("scoring/highest_single_hand_score", self.highest_single_hand_score)
         self._record_rollout_value_mean("scoring/mean_blind_score_rollout",   "blind_score")
         self._record_rollout_value_mean("scoring/mean_run_best_hand_rollout", "run_best_hand")
+        self.logger.record("scoring/total_pb_hand_bonuses", self.totals["pb_hand_bonuses"])
+        self._record_rollout_mean("scoring/mean_pb_hand_bonuses_rollout", "pb_hand_bonuses")
+
+        # --- deck/ (upgraded playing cards: run-end rollout mean + all-time per-run peak) ---
+        for field in DECK_STAT_FIELDS:
+            self._record_rollout_value_mean(f"deck/mean_{field}_rollout", f"deck_{field}")
+            self.logger.record(f"deck/best_{field}", self.best_deck_stats[field])
 
         # --- hand_<type>/ (all-time + rollout distribution) ---
         total_hands = sum(self.hand_type_counts.values()) or 1
@@ -653,6 +679,7 @@ class BalatroMetricsCallback(BaseCallback):
         self._record_rollout_mean("shop/mean_visits_rollout",  "shop_visits")
         self._record_rollout_mean("shop/mean_rerolls_rollout", "rerolls")
         self._record_ratio("shop/voucher_purchase_rate", "vouchers_bought", "vouchers_offered")
+        self.logger.record("shop/total_boss_rerolls", self.totals["boss_rerolls"])
 
         # --- voucher_by_name/ ---
         for key in set(self.voucher_offered_by_name) | set(self.voucher_bought_by_name):
@@ -660,19 +687,22 @@ class BalatroMetricsCallback(BaseCallback):
             self.logger.record(f"voucher_by_name/{key}_offered", self.voucher_offered_by_name[key])
 
         # --- boosters/ ---
-        self.logger.record("boosters/total_bought",      self.totals["packs_bought"])
-        self.logger.record("boosters/total_opened",      self.totals["packs_opened"])
-        self.logger.record("boosters/total_opened_free", self.totals["packs_opened"] - self.totals["packs_bought"])
-        self.logger.record("boosters/total_skipped",     self.totals["packs_skips"])
-        self.logger.record("boosters/total_picks",       self.totals["packs_picks"])
-        self._record_ratio("boosters/buy_skip_ratio",  "packs_bought", "packs_skips")
+        self.logger.record("boosters/total_offered",        self.totals["packs_offered"])
+        self.logger.record("boosters/total_bought",         self.totals["packs_bought"])
+        self.logger.record("boosters/total_opened",         self.totals["packs_opened"])
+        self.logger.record("boosters/total_skipped",        self.totals["packs_skips"])
+        self.logger.record("boosters/total_picks",          self.totals["packs_picks"])
+        self.logger.record("boosters/total_bought_skipped", self.totals["boosters_bought_skipped"])
+        self._record_ratio("boosters/buy_rate",        "packs_bought", "packs_offered")
         self._record_ratio("boosters/pick_skip_ratio", "packs_picks", "packs_skips")
         self._record_ratio("boosters/skip_rate",       "packs_skips", "packs_opened")
 
         # --- booster_by_type/ ---
         for key, counts in self.pack_stats_by_type.items():
-            for field in ("opened", "bought", "picks", "skips"):
+            for field in PACK_FIELDS:
                 self.logger.record(f"booster_by_type/{key}_{field}", counts[field])
+            self.logger.record(f"booster_by_type/{key}_buy_rate",
+                               counts["bought"] / max(1, counts["offered"]))
             self.logger.record(f"booster_by_type/{key}_pick_skip_ratio",
                                counts["picks"] / max(1, counts["skips"]))
 
@@ -694,6 +724,8 @@ class BalatroMetricsCallback(BaseCallback):
         self._record_rollout_mean("jokers/mean_end_count_rollout", "jokers_end_count")
         self._record_ratio("jokers/buy_sell_ratio",  "jokers_purchased", "jokers_sold")
         self._record_ratio("jokers/gain_sell_ratio", "jokers_gained", "jokers_sold")
+        self._record_ratio("jokers/mean_contribution_at_sell", "sold_joker_contribution", "jokers_sold")
+        self.logger.record("jokers/total_upgrades",  self.totals["joker_upgrades"])
 
         # --- joker_tenure/ ---
         self._record_ratio("joker_tenure/mean_rounds_held", "joker_hold_rounds", "joker_holds")
@@ -711,6 +743,9 @@ class BalatroMetricsCallback(BaseCallback):
                                    self._mean(self.joker_rounds_held[key]))
                 self.logger.record(f"joker_by_name/{key}_max_rounds_held",
                                    self.joker_max_rounds_held[key])
+            if self.joker_contributions[key]:
+                self.logger.record(f"joker_by_name/{key}_mean_contribution",
+                                   self._mean(self.joker_contributions[key]))
 
         # --- consumables/ ---
         self.logger.record("consumables/total_used",   self.totals["consumables_used"])

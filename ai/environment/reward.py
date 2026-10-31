@@ -1,17 +1,23 @@
 from typing import Dict, Any
 import numpy as np
-from ..utils.constants import PACK_STATE_IDS, SHOP_STATE_ID, SELECTING_HAND_STATE_ID, TENURE_CAP
+from ..utils.constants import (PACK_STATE_IDS, SHOP_STATE_ID, SELECTING_HAND_STATE_ID,
+                               PASSIVE_JOKERS, PASSIVE_CONTRIBUTION_FLOOR)
 
 # Inventory potential weights: reward = Φ(s') - Φ(s), so buy→sell nets zero
-# Joker potential grows with rounds held; selling refunds all accumulated tenure reward
+# Joker potential grows with the joker's measured contribution (score share + value generated, 0..1)
 JOKER_BASE_POTENTIAL = 4.0
-JOKER_TENURE_POTENTIAL = 1.5  # per blind cleared while held
-CONSUMABLE_POTENTIAL = 1.5
+JOKER_CONTRIBUTION_POTENTIAL = 8.0
+# Deck potential: upgrades (enhancement/seal/edition, one each) as a fraction of deck size
+DECK_QUALITY_POTENTIAL = 30.0
 MID_BLIND_SELL_PENALTY = 2.0
 FRESH_SELL_PENALTY = 1.0  # selling a joker before it has been held through a blind
 SAVINGS_TIER_BONUS = 1.0  # per $5 interest tier held when leaving the shop
 SAVINGS_TIER_CAP = 5
 MONEY_EARNED_WEIGHT = 0.5
+CONSUMABLE_USE_REWARD = {"Planet": 2.0, "Tarot": 4.0, "Spectral": 5.0}
+PACK_PICK_REWARD = 1.5      # per card taken from a tarot/planet/spectral/standard pack
+BOOSTER_SKIP_PENALTY = 1.5  # bought a pack and took nothing (waived with Red Card)
+PB_HAND_BONUS = 3.0         # × min(1, improvement / blind requirement) on a new best single hand
 
 class BalatroRewardCalculator:
     def __init__(self):
@@ -57,6 +63,14 @@ class BalatroRewardCalculator:
         self.fresh_joker_sells = 0
         self.max_joker_tenure = 0
         self.shop_exit_golds: list = []
+        self.deck_stats: Dict[str, float] = {}
+        self.max_deck_stats: Dict[str, float] = {}
+        self.boosters_bought_skipped = 0
+        self.pb_hand_bonuses = 0
+
+        # Open-pack tracking (buy-then-skip penalty)
+        self.pack_purchased = False
+        self.pack_picks = 0
 
         self.episode_reward_breakdown: list[str] = []
 
@@ -76,13 +90,36 @@ class BalatroRewardCalculator:
         return float(np.clip(reward, -30.0, 120.0))
 
     @staticmethod
-    def _joker_potential(joker) -> float:
-        return JOKER_BASE_POTENTIAL + JOKER_TENURE_POTENTIAL * min(joker.get('rounds_held', 0), TENURE_CAP)
+    def _joker_contribution(joker) -> float:
+        contribution = float(joker.get('contribution', 0.0))
+        if joker.get('name') in PASSIVE_JOKERS:
+            contribution = max(contribution, PASSIVE_CONTRIBUTION_FLOOR)
+        return min(1.0, max(0.0, contribution))
+
+    @classmethod
+    def _joker_potential(cls, joker) -> float:
+        return JOKER_BASE_POTENTIAL + JOKER_CONTRIBUTION_POTENTIAL * cls._joker_contribution(joker)
+
+    @staticmethod
+    def deck_quality(game_state) -> Dict[str, float]:
+        """Upgraded-card counts in the full deck; upgrades counts each enhancement, seal and edition once."""
+        cards = game_state.get('deck_cards') or []
+        enhanced = sum(1 for c in cards if c.get('enhancement', 'c_base') not in ('c_base', 'Base', 'Default Base'))
+        sealed = sum(1 for c in cards if c.get('seal', 'None') not in ('None', None))
+        editioned = sum(1 for c in cards if c.get('edition', 'none') not in ('none', None))
+        upgrades = enhanced + sealed + editioned
+        return {
+            "size": len(cards),
+            "enhanced": enhanced,
+            "sealed": sealed,
+            "editioned": editioned,
+            "upgrades": upgrades,
+            "upgrade_pct": upgrades / len(cards) if cards else 0.0,
+        }
 
     @classmethod
     def _inventory_potential(cls, game_state) -> float:
-        return (sum(cls._joker_potential(j) for j in game_state.get('jokers', []))
-                + CONSUMABLE_POTENTIAL * len(game_state.get('consumables', [])))
+        return sum(cls._joker_potential(j) for j in game_state.get('jokers', []))
 
     def episode_stats(self) -> Dict[str, float]:
         """Per-episode reward-shaping stats for TensorBoard."""
@@ -91,10 +128,22 @@ class BalatroRewardCalculator:
             "fresh_joker_sells": self.fresh_joker_sells,
             "max_joker_tenure": self.max_joker_tenure,
             "mean_shop_exit_gold": (sum(golds) / len(golds)) if golds else 0.0,
+            "deck_enhanced": self.deck_stats.get("enhanced", 0),
+            "deck_sealed": self.deck_stats.get("sealed", 0),
+            "deck_editioned": self.deck_stats.get("editioned", 0),
+            "deck_upgrades": self.deck_stats.get("upgrades", 0),
+            "deck_upgrade_pct": self.deck_stats.get("upgrade_pct", 0.0),
+            "max_deck_enhanced": self.max_deck_stats.get("enhanced", 0),
+            "max_deck_sealed": self.max_deck_stats.get("sealed", 0),
+            "max_deck_editioned": self.max_deck_stats.get("editioned", 0),
+            "max_deck_upgrades": self.max_deck_stats.get("upgrades", 0),
+            "max_deck_upgrade_pct": self.max_deck_stats.get("upgrade_pct", 0.0),
+            "boosters_bought_skipped": self.boosters_bought_skipped,
+            "pb_hand_bonuses": self.pb_hand_bonuses,
         }
 
     def calculate_inventory_reward(self, current_state, prev_state=None) -> float:
-        """Tenure-weighted inventory potential, fresh/mid-blind sell penalties, and shop-exit savings bonus."""
+        """Contribution-weighted joker potential, deck-quality potential, fresh/mid-blind sell penalties, and shop-exit savings bonus."""
         if not prev_state:
             return 0.0
         reward = 0.0
@@ -105,9 +154,22 @@ class BalatroRewardCalculator:
             return 0.0
 
         potential_delta = self._inventory_potential(current_game_state) - self._inventory_potential(prev_game_state)
-        if potential_delta != 0.0:
+        if abs(potential_delta) > 1e-6:
             reward += potential_delta
-            breakdown.append(f"inventory_potential: {potential_delta:+.2f}")
+            breakdown.append(f"joker_potential: {potential_delta:+.2f}")
+
+        # Deck quality: skip frames where either deck is missing (menu/transition) so the potential doesn't swing
+        curr_deck = self.deck_quality(current_game_state)
+        prev_deck = self.deck_quality(prev_game_state)
+        if curr_deck["size"] > 0:
+            self.deck_stats = curr_deck
+            for k, v in curr_deck.items():
+                self.max_deck_stats[k] = max(self.max_deck_stats.get(k, 0), v)
+        if curr_deck["size"] > 0 and prev_deck["size"] > 0:
+            deck_delta = DECK_QUALITY_POTENTIAL * (curr_deck["upgrade_pct"] - prev_deck["upgrade_pct"])
+            if abs(deck_delta) > 1e-6:
+                reward += deck_delta
+                breakdown.append(f"deck_quality {curr_deck['upgrades']}/{curr_deck['size']}: {deck_delta:+.2f}")
 
         curr_jokers = current_game_state.get('jokers', [])
         for j in curr_jokers:
@@ -164,14 +226,6 @@ class BalatroRewardCalculator:
 
         current_jokers = current_game_state.get('jokers', [])
 
-        curr_consumable_count = len(current_game_state.get('consumables', []))
-        prev_consumable_count = len(prev_game_state.get('consumables', []))
-
-        if money_spent > 0:
-            penalty = 0.3 * np.log1p(money_spent)
-            reward -= penalty
-            breakdown.append(f"money_spent_penalty -{money_spent}: -{penalty:.2f}")
-
         prev_state_id = prev_game_state.get('state', 0)
         curr_state_id = current_game_state.get('state', 0)
         if prev_state_id == SHOP_STATE_ID and curr_state_id != SHOP_STATE_ID:
@@ -197,20 +251,31 @@ class BalatroRewardCalculator:
             reward += 8.0
             breakdown.append("voucher_purchased: +8.00")
 
-        # BUY_AND_USE_CONSUMABLE: consumable shop item disappeared, money was spent, and it wasn't kept
-        prev_consumable_shop = [it for it in prev_shop_items if it.get('type') == 'consumable']
-        curr_consumable_shop = [it for it in curr_shop_items if it.get('type') == 'consumable']
-        if (len(prev_consumable_shop) > len(curr_consumable_shop) and money_spent > 0
-                and curr_consumable_count <= prev_consumable_count):
-            reward += 2.0
-            breakdown.append("buy_and_use_consumable: +2.00")
-
         scaled = float(np.tanh(reward / 5.0) * 5.0)
         if breakdown:
             self.episode_reward_breakdown.append(
                 f"[SHOP] raw={reward:.2f} → scaled={scaled:.2f}: " + "; ".join(breakdown)
             )
         return scaled
+
+    @staticmethod
+    def _total_pack_picks(game_state) -> int:
+        packs = (game_state.get('run_stats') or {}).get('packs') or {}
+        if not isinstance(packs, dict):
+            return 0
+        return sum(int(p.get('picks', 0)) for p in packs.values() if isinstance(p, dict))
+
+    @staticmethod
+    def _consumable_uses_by_set(game_state) -> Dict[str, int]:
+        usage = (game_state.get('run_stats') or {}).get('consumable_usage') or {}
+        by_set: Dict[str, int] = {}
+        if not isinstance(usage, dict):
+            return by_set
+        for entry in usage.values():
+            if isinstance(entry, dict):
+                s = entry.get('set', 'Unknown')
+                by_set[s] = by_set.get(s, 0) + int(entry.get('count', 0))
+        return by_set
 
     def calculate_pack_reward(self, current_state, prev_state=None) -> float:
         reward = 0.0
@@ -222,33 +287,42 @@ class BalatroRewardCalculator:
 
         prev_state_id = prev_game_state.get('state', 0)
         curr_state_id = current_game_state.get('state', 0)
+        pack_names = {9: "TAROT_PACK", 10: "PLANET_PACK", 15: "SPECTRAL_PACK", 17: "STANDARD_PACK", 18: "BUFFOON_PACK"}
+        pack_name = pack_names.get(prev_state_id, f'PACK_{prev_state_id}')
+
+        # Pack opened: remember whether it was bought (gold dropped leaving the shop) or free (tag)
+        if curr_state_id in PACK_STATE_IDS and prev_state_id not in PACK_STATE_IDS:
+            self.pack_purchased = (prev_state_id == SHOP_STATE_ID
+                                   and current_game_state.get('gold', 0) < prev_game_state.get('gold', 0))
+            self.pack_picks = 0
+            return reward
 
         if prev_state_id not in PACK_STATE_IDS:
             return reward
 
-        prev_choices = prev_game_state.get('pack_choices', 0)
-        curr_choices = current_game_state.get('pack_choices', 0)
+        # Picks counted by the Lua use_card hook (pack_choices also drops during skip cleanup)
+        picks = self._total_pack_picks(current_game_state) - self._total_pack_picks(prev_game_state)
+        if picks > 0:
+            self.pack_picks += picks
+            # Buffoon picks are paid through joker potential
+            pack_cards = prev_game_state.get('pack_cards') or []
+            is_buffoon = prev_state_id == 18 or (prev_state_id == 999 and bool(pack_cards)
+                                                 and pack_cards[0].get('item_set') == 'Joker')
+            if not is_buffoon:
+                pick_reward = PACK_PICK_REWARD * picks
+                reward += pick_reward
+                self.episode_reward_breakdown.append(f"[PACK] {pack_name} pick: +{pick_reward:.2f}")
 
-        if curr_choices < prev_choices:
-            prev_consumable_count = len(prev_game_state.get('consumables', []))
-            curr_consumable_count = len(current_game_state.get('consumables', []))
+        # Pack closed: bought it but took nothing
+        if curr_state_id not in PACK_STATE_IDS:
+            holds_red_card = any(j.get('name') == 'Red Card' for j in current_game_state.get('jokers', []))
+            if self.pack_purchased and self.pack_picks == 0 and not holds_red_card:
+                reward -= BOOSTER_SKIP_PENALTY
+                self.boosters_bought_skipped += 1
+                self.episode_reward_breakdown.append(f"[PACK] {pack_name} bought then skipped: -{BOOSTER_SKIP_PENALTY:.2f}")
+            self.pack_purchased = False
+            self.pack_picks = 0
 
-            new_consumables = curr_consumable_count - prev_consumable_count
-
-            if prev_state_id == 10:
-                if new_consumables > 0:
-                    reward += 4.0
-            elif prev_state_id in {9, 15}:
-                if new_consumables > 0:
-                    reward += 3.0
-            elif prev_state_id == 17:
-                reward += 1.0
-
-        if reward != 0.0:
-            pack_names = {9: "TAROT_PACK", 10: "PLANET_PACK", 15: "SPECTRAL_PACK", 17: "STANDARD_PACK", 18: "BUFFOON_PACK"}
-            self.episode_reward_breakdown.append(
-                f"[PACK] {pack_names.get(prev_state_id, f'PACK_{prev_state_id}')}: +{reward:.2f}"
-            )
         return float(reward)
 
     def calculate_play_reward(self, current_state: Dict[str, Any],
@@ -308,16 +382,29 @@ class BalatroRewardCalculator:
             prev_gold = prev_game_state.get('gold', self.previous_money)
             gold_increased = current_gold > prev_gold
 
-            # Sell = consumable gone AND gold went up; use = consumable gone AND gold didn't go up
+            # Sell = consumable gone AND gold went up
             is_consumable_sell = consumable_decreased and gold_increased
-            is_consumable_use = consumable_decreased and not is_consumable_sell
             # Joker sold (in any state) = joker count dropped AND gold went up
             joker_decreased = len(inner_game_state.get('jokers', [])) < len(prev_game_state.get('jokers', []))
             is_joker_sell = joker_decreased and gold_increased
 
-            if is_consumable_use:
-                reward += CONSUMABLE_POTENTIAL
-                reward_breakdown.append(f"use_consumable: +{CONSUMABLE_POTENTIAL:.2f}")
+            # Successful consumable use, by set (counts reset per run, so drops are ignored)
+            prev_uses = self._consumable_uses_by_set(prev_game_state)
+            for card_set, count in self._consumable_uses_by_set(inner_game_state).items():
+                used = count - prev_uses.get(card_set, 0)
+                if used > 0 and card_set in CONSUMABLE_USE_REWARD:
+                    use_reward = CONSUMABLE_USE_REWARD[card_set] * used
+                    reward += use_reward
+                    reward_breakdown.append(f"use_{card_set.lower()} x{used}: +{use_reward:.2f}")
+
+            # Personal best single hand this run, scaled to the blind so overkill isn't paid
+            prev_best = (prev_game_state.get('run_stats') or {}).get('high_score', 0) or 0
+            curr_best = (inner_game_state.get('run_stats') or {}).get('high_score', 0) or 0
+            if prev_best > 0 and curr_best > prev_best and blind_chips > 0:
+                pb_reward = PB_HAND_BONUS * min(1.0, (curr_best - prev_best) / blind_chips)
+                reward += pb_reward
+                self.pb_hand_bonuses += 1
+                reward_breakdown.append(f"personal_best_hand {prev_best}→{curr_best}: +{pb_reward:.2f}")
 
             # Money earned from non-sell sources: gold cards, joker effects, blind payouts, interest
             if gold_increased and not is_consumable_sell and not is_joker_sell:
@@ -471,6 +558,12 @@ class BalatroRewardCalculator:
         self.fresh_joker_sells = 0
         self.max_joker_tenure = 0
         self.shop_exit_golds = []
+        self.deck_stats = {}
+        self.max_deck_stats = {}
+        self.boosters_bought_skipped = 0
+        self.pb_hand_bonuses = 0
+        self.pack_purchased = False
+        self.pack_picks = 0
 
         if hasattr(self, 'game_over_penalty_applied'):
             delattr(self, 'game_over_penalty_applied')

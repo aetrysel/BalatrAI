@@ -143,6 +143,6 @@ class ResponseValidator:
         assert isinstance(response["action"], int)
         assert isinstance(response["params"], list)
         
-        valid_actions = list(range(1, 20))  # 1-19
+        valid_actions = list(range(1, 21))  # 1-20
         assert response["action"] in valid_actions, f"Invalid action ID: {response['action']}"
 

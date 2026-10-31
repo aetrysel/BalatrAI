@@ -39,6 +39,7 @@ end
 function AI.init()
     communication.init()
     require("stats").install()
+    require("joker_tracker").install()
 
     -- Hook into Love2D keyboard events
     if love and love.keypressed then

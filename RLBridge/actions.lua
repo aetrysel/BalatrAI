@@ -29,6 +29,7 @@ ACTIONS.SKIP_BOOSTER           = 16
 ACTIONS.SKIP_BLIND             = 17
 ACTIONS.BUY_AND_USE_CONSUMABLE = 18
 ACTIONS.SELL_CONSUMABLE        = 19
+ACTIONS.REROLL_BOSS            = 20
 
 local ACTION_IDS = {
     select_hand            = ACTIONS.SELECT_HAND,
@@ -50,6 +51,7 @@ local ACTION_IDS = {
     skip_blind             = ACTIONS.SKIP_BLIND,
     buy_and_use_consumable = ACTIONS.BUY_AND_USE_CONSUMABLE,
     sell_consumable        = ACTIONS.SELL_CONSUMABLE,
+    reroll_boss            = ACTIONS.REROLL_BOSS,
 }
 
 local ID_TO_ACTION = {
@@ -72,6 +74,7 @@ local ID_TO_ACTION = {
     [ACTIONS.SKIP_BLIND]             = "skip_blind",
     [ACTIONS.BUY_AND_USE_CONSUMABLE] = "buy_and_use_consumable",
     [ACTIONS.SELL_CONSUMABLE]        = "sell_consumable",
+    [ACTIONS.REROLL_BOSS]            = "reroll_boss",
 }
 
 local function is_pack_state()
@@ -138,6 +141,27 @@ local action_registry = {
             return G.STATE == G.STATES.BLIND_SELECT and G.GAME.blind_on_deck ~= nil
                 and not action_state.select_blind
                 and utils.is_game_ready_for_action()
+        end,
+    },
+    reroll_boss = {
+        execute = function(params)
+            return input.reroll_boss()
+        end,
+        -- Same condition as the game's Reroll Boss button (Director's Cut once per ante, Retcon unlimited)
+        available_when = function()
+            if G.STATE ~= G.STATES.BLIND_SELECT or not G.GAME or not G.GAME.used_vouchers then
+                return false
+            end
+            local vouchers = G.GAME.used_vouchers
+            local can_reroll = vouchers["v_retcon"]
+                or (vouchers["v_directors_cut"] and not G.GAME.round_resets.boss_rerolled)
+            return can_reroll
+                and (G.GAME.dollars - G.GAME.bankrupt_at) - 10 >= 0
+                and G.blind_select_opts ~= nil and G.blind_select_opts.boss ~= nil
+                and not (G.CONTROLLER.locks and G.CONTROLLER.locks.boss_reroll)
+                and not action_state.reroll_boss
+                and utils.is_game_ready_for_action()
+                or false
         end,
     },
     skip_blind = {

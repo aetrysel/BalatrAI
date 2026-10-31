@@ -124,9 +124,9 @@ def item_id_norm(name: str) -> float:
 
 class BalatroStateMapper:
     """
-    Converts raw Balatro game state JSON to a 417-dimensional RL observation.
+    Converts raw Balatro game state JSON to a 440-dimensional RL observation.
 
-    Layout (417 total):
+    Layout (440 total):
       2  round (hands_left, discards_left)
       1  blind_chips
       1  chips
@@ -139,17 +139,18 @@ class BalatroStateMapper:
       1  game_win
       1  retry_count
      16  deck name one-hot
-     25  jokers (5 × 5: occupied, name_id, sell_cost_norm, edition_id, rounds_held_norm)
-     10  consumables held (5 × 2: occupied, name_id)
+     35  jokers (5 × 7: occupied, name_id, sell_cost_norm, edition_id, rounds_held_norm,
+                 contribution, triggered_last_hand)
+     20  consumables held (5 × 4: occupied, name_id, max_highlighted_norm, can_use)
      21  shop (4 joker × 3 + 1 voucher × 3 + 2 booster × 3)
      10  pack_cards (5 × 2: occupied, name_id)
      17  deck stats (size + 4 seals + 8 enhancements + 4 editions)
     254  hand features
      16  current_hand scoring
-     17  available actions mask
+     20  available actions mask
     """
 
-    OBSERVATION_SIZE = 417
+    OBSERVATION_SIZE = 440
 
     def __init__(self, observation_size: int, max_actions: int):
         self.observation_size = observation_size
@@ -226,9 +227,11 @@ class BalatroStateMapper:
                 features.append(normalize(float(j.get('sell_cost', 0)), 20.0))
                 features.append(EDITION_IDS.get(j.get('edition', 'none'), 0) / MAX_EDITION_ID)
                 features.append(normalize(float(j.get('rounds_held', 0)), float(TENURE_CAP)))
+                features.append(float(j.get('contribution', 0.0)))
+                features.append(1.0 if j.get('triggered_last_hand') else 0.0)
             else:
-                features.extend([0.0, 0.0, 0.0, 0.0, 0.0])
-        return features  # 5 × 5 = 25
+                features.extend([0.0] * 7)
+        return features  # 5 × 7 = 35
 
     def _extract_consumable_features(self, consumables: List[Dict[str, Any]]) -> List[float]:
         features = []
@@ -237,9 +240,11 @@ class BalatroStateMapper:
                 c = consumables[i]
                 features.append(1.0)
                 features.append(item_id_norm(c.get('name', '')))
+                features.append(normalize(float(c.get('max_highlighted', 0)), 5.0))
+                features.append(1.0 if c.get('can_use') else 0.0)
             else:
-                features.extend([0.0, 0.0])
-        return features  # 5 × 2 = 10
+                features.extend([0.0] * 4)
+        return features  # 5 × 4 = 20
 
     def _extract_shop_features(self, shop_items: List[Dict[str, Any]]) -> List[float]:
         joker_slots: List[Dict] = []
@@ -398,6 +403,7 @@ class BalatroActionMapper:
             16: 17,  # SKIP_BLIND
             17: 18,  # BUY_AND_USE_CONSUMABLE
             18: 19,  # SELL_CONSUMABLE
+            19: 20,  # REROLL_BOSS
         }
 
         balatro_action_id = ai_to_balatro_mapping.get(ai_action, 1)
