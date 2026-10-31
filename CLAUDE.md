@@ -21,30 +21,38 @@ balatro-rl/
 │   ├── actions.lua     # Action registry (IDs, availability, execution routing)
 │   ├── input.lua       # Translates actions into game inputs
 │   ├── output.lua      # Serializes game state to JSON
+│   ├── stats.lua       # Per-run tag/booster/boss-reroll counters (read-only hooks)
+│   ├── joker_tracker.lua # Per-joker score share, value generated, upgrades (read-only hooks)
 │   ├── communication.lua # Pipe/socket IPC with Python
 │   ├── init.lua        # Run startup, speed/animation settings
 │   ├── utils.lua       # Logging, helpers
 │   └── dkjson.lua      # JSON encode/decode library
 ├── ai/                 # Python RL training code
 │   ├── train_balatro.py         # Entry point; training orchestration
+│   ├── config/
+│   │   └── seeds.json           # Named seeds (persisted between sessions)
 │   ├── environment/
 │   │   ├── balatro_env.py       # Gymnasium environment wrapper
 │   │   └── reward.py            # Reward calculator
 │   └── utils/
 │       ├── communication.py     # Pipe/socket layer (Python side)
-│       ├── mappers.py           # Game state → observation vector
+│       ├── constants.py         # Game state ID constants (SELECTING_HAND_STATE_ID etc.)
+│       ├── mappers.py           # Game state → observation vector (BalatroStateMapper)
 │       ├── callbacks.py         # SB3 training callbacks, TensorBoard metrics
 │       ├── validation.py        # JSON schema validators
 │       ├── replay.py            # Saves top-10 winning episodes
+│       ├── history_logger.py    # Human-readable per-session action/event log
 │       └── debug.py             # Timestamped print helpers
 ├── balatro-source-code/ # Decompiled Balatro source — reference only, do not edit
-├── models/             # Saved model checkpoints (run_N_YYYYMMDD_HHMMSS/)
-└── tensorboard_logs/   # TensorBoard event files
+├── models/             # Saved model checkpoints (NNN_Name_YYYYMMDD_HHMMSS/, legacy run_N_YYYYMMDD_HHMMSS/)
+├── logs/               # Log groups: NNN_name/{tensorboard,history}/ (one group per feature change)
+├── game_history_logs/  # Legacy per-session history logs (pre log groups)
+└── tensorboard_logs/   # Legacy TensorBoard event files (pre log groups)
 ```
 
 ### Lovely Patching System
 The mod uses `RLBridge/lovely/` to define patches:
-- `init.toml` — injects all 8 Lua modules, hooks `G:start_up()`, patches animation skipping
+- `init.toml` — injects all 10 Lua modules (incl. `stats.lua`, `joker_tracker.lua`), hooks `G:start_up()`, patches animation skipping
 - `ai.toml` — hooks `G:update(dt)` to call `AI.update()` every frame
 - Any additional patch can be created by adding a `.toml` file in the lovely dir
 
@@ -84,12 +92,22 @@ Key packages: `gymnasium`, `stable-baselines3`, `sb3-contrib` (MaskablePPO), `to
 python -m ai.train_balatro
 ```
 
-Interactive prompts will ask:
-1. **Seed choice**: `0` = training seed (JFKGEEMG), `1` = test seed (FK76PMFU), `2` = random
-2. **Resume or fresh**: pick an existing `models/run_N_*` directory or start a new run
-3. Start Balatro, then press `R` in-game to activate the RL loop
+All prompts come before "Press Enter to start training". The first launch asks for every setting; later launches load `ai/config/last_session.json` and show a settings menu — press Enter to reuse everything, or type option numbers (e.g. `1 6`) to change only those:
+1. **Seed** (named seeds in `ai/config/seeds.json`, or random)
+2. **Deck**, 3. **Training steps** (additional steps when resuming), 4. **Endless**, 5. **Debug mode** (`n_steps=128`)
+6. **Model**: `[N]` new named run, or `[C]` continue a prior run (latest checkpoint; `NNN_*` and legacy `run_N_*` dirs). After a new run launches, the saved setting switches to continuing it.
+7. **Log group**: an existing `logs/NNN_name/` (default: the group already holding the run's TB entry, else latest) or a new one (number auto-increments)
 
-Training saves checkpoints to `models/run_N_YYYYMMDD_HHMMSS/` and TensorBoard logs to `tensorboard_logs/`.
+Then start Balatro and press `R` in-game to activate the RL loop.
+
+Every run has one name, `<run>` = `NNN_Custom_Name_YYYYMMDD_HHMMSS` (3-digit run number), shared by:
+- `models/<run>/` — checkpoints
+- `logs/NNN_group/tensorboard/<run>/` — one TB entry per run; every session of the run writes another event file into it. Continuing passes `reset_num_timesteps=False`, so the step axis (and checkpoint step numbers) carry on and the curve stays continuous.
+- `logs/NNN_group/history/<run>_session_NN.log` — a new history file every session (numbered across all groups)
+
+Point TensorBoard at a group: `tensorboard --logdir logs/NNN_name/tensorboard`.
+
+Endless/seed/deck are passed to the mod via the run config file (`/tmp/balatro_run_config.json`, or `%APPDATA%/Balatro/Mods/RLBridge/run_config.json` on Windows), read by `UTIL.get_run_config()`. On the ante 8 win the mod dismisses the win overlay and keeps playing (endless) or returns to the menu to start a new run.
 
 ## Key Implementation Details
 
@@ -185,6 +203,15 @@ Line-delimited JSON (one JSON object per line, terminated with `\n`).
 | 9 | REROLL_SHOP | SHOP | none |
 | 10 | SKIP_SHOP | SHOP | none |
 | 11 | CASH_OUT | ROUND_EVAL | none |
+| 12 | BUY_VOUCHER | SHOP | none |
+| 13 | BUY_BOOSTER | SHOP | `slot`: 1-based booster slot |
+| 14 | USE_CONSUMABLE | SELECTING_HAND, SHOP, packs | `slot`: 1-based consumable slot (needs the game's `can_use`, e.g. exactly k highlighted cards) |
+| 15 | SELECT_PACK_CARD | packs | `slot`: 1-based pack card |
+| 16 | SKIP_BOOSTER | packs | none |
+| 17 | SKIP_BLIND | BLIND_SELECT (Small/Big) | none |
+| 18 | BUY_AND_USE_CONSUMABLE | SHOP | `slot`: 1-based shop slot |
+| 19 | SELL_CONSUMABLE | SHOP, SELECTING_HAND, packs | `slot`: 1-based consumable slot |
+| 20 | REROLL_BOSS | BLIND_SELECT | none (Director's Cut once per ante or Retcon; $10, same condition as the game's button) |
 
 The Lua `ACTIONS` module validates availability before execution and returns `{success, error}`. The Python side uses `ActionMasker` (sb3-contrib) to mask unavailable actions in the policy.
 
@@ -196,7 +223,7 @@ MaskablePPO (from sb3-contrib) with MlpPolicy. Key hyperparameters:
 - `gamma`: 0.99, `ent_coef`: 0.01, `learning_rate`: 3e-4
 
 ### Observation Space
-Shape `(414,)` float32 vector built by `ai/utils/mappers.py` (`BalatroStateMapper`):
+Shape `(440,)` float32 vector built by `ai/utils/mappers.py` (`BalatroStateMapper`):
 
 | Slice | Features | Count |
 |-------|----------|-------|
@@ -206,32 +233,63 @@ Shape `(414,)` float32 vector built by `ai/utils/mappers.py` (`BalatroStateMappe
 | Game state | one-hot (20) + game_over + game_win + retry_count | 23 |
 | Blind identity | blind_name_id (norm /30), blind_is_boss | 2 |
 | Deck | deck name one-hot | 16 |
-| Jokers | 5 slots × 4 (occupied, name_id, sell_cost, edition) | 20 |
-| Consumables | 5 slots × 2 (occupied, name_id) | 10 |
+| Jokers | 5 slots × 7 (occupied, name_id, sell_cost, edition, rounds_held norm /6, contribution, triggered_last_hand) | 35 |
+| Consumables | 5 slots × 4 (occupied, name_id, max_highlighted norm /5, can_use) | 20 |
 | Shop | 4 joker + 1 voucher + 2 booster slots × 3 each | 21 |
 | Pack cards | 5 slots × 2 (occupied, name_id) | 10 |
 | Deck stats | size + 4 seals + 8 enhancements + 4 editions | 17 |
 | Hand | size, highlighted_count + 12 cards × 21 features | 254 |
 | Scoring | chips, mult, score + hand type one-hot × 13 | 16 |
-| Action mask | 17 actions | 17 |
+| Action mask | 20 actions | 20 |
 
 **Note:** `blind_name` is encoded as a vocabulary index (`BLIND_NAMES` list in `mappers.py`). `blind_is_boss` is a binary flag from `G.GAME.blind.boss`. `round_count` maps `G.GAME.round` (not a career stat — it's a per-run counter reset on new run).
 
 ### Reward System (`ai/environment/reward.py`)
-Two components:
+Four components (summed every step):
 
-**Play reward** (SELECTING_HAND):
-- Chip gain: quadratic scaling up to +20
-- Blind clear: +30 × 1.5^(ante-1); one-hand bonuses (+25/+15/+8)
-- Ante progression: +10 × ante; boss blind: +15 × ante
-- Game over: −20
+**Inventory reward** (any state, potential-based so buy→sell nets 0):
+- Joker Φ = Σ_jokers (4 + 8 × contribution); reward = Φ(s') − Φ(s). Selling filler costs ~4, selling a carry up to 12
+- `contribution` (0..1) = score share EMA + value EMA from `RLBridge/joker_tracker.lua`:
+  - score share per hand = 1 − e^(−c), c = log-gain of the joker's chips/mult/xmult/retriggers/edition (fraction of the hand's score lost without it); EMA α=0.3 over hands held
+  - value per round = min(1, ($ generated + 3 × consumables/jokers created) / 8); EMA α=0.3 over rounds
+  - Blueprint/Brainstorm get the credit for what they copy; jokers in `PASSIVE_JOKERS` (`ai/utils/constants.py`) are floored at 0.3
+- Deck Φ = 30 × upgrades / deck_size (one per enhancement, seal, edition on each card) — rewards adding upgraded cards and thinning
+- `rounds_held` (blinds cleared while holding, per `sort_id` in `BalatroEnv._annotate_joker_tenure`) is an obs feature and metric only
+- Selling a joker with `rounds_held == 0` (any state): −1 per joker
+- Selling during SELECTING_HAND: −2 (except a consumable sell when consumable slots are full)
+- Savings on leaving the shop: +1 per $5 interest tier held (max +5 at $25)
 
-**Shop reward** (SHOP):
-- Joker purchase: +10; joker sell: −1
-- Money earned: +0.5 × gain; joker slot utilization: +0.5/step
-- Leave shop broke with no jokers: −3
+**Play reward** (any state, clipped to [−25, +120]):
+- Chip gain: up to +10
+- Blind clear: +(15 + 5 × ante); one-hand bonuses (+10/+6/+3); deck thinning +1 per card removed
+- Ante progression: +5 × ante; boss blind: +5 × ante
+- Money earned (non-sell sources): +0.5 × gain
+- Consumable used (from `run_stats.consumable_usage`): planet +2, tarot +4, spectral +5; no reward for acquiring or holding
+- New best single hand this run: +3 × min(1, improvement / blind_chips)
+- Game over: −15 + up to +8 progress credit
 
-Reward clipped to [−25, +500].
+**Shop reward** (tanh-scaled to ±5): no spend penalty; voucher +8; leave shop: +1 × joker slot utilization; −3 if broke with no jokers
+
+**Pack reward**: +1.5 per card taken from tarot/planet/spectral/standard packs (picks counted by the Lua `use_card` hook; buffoon picks rewarded via joker potential); −1.5 for buying a pack and taking nothing (waived with Red Card)
+
+Step total clipped to [−30, +120]. No `VecNormalize`; SB3 normalizes advantages per batch.
+
+### TensorBoard Metrics (`ai/utils/callbacks.py`)
+Everything is recorded once per rollout (policy update). `<metric>` = all-time in this training process; `<metric>_rollout` = episodes that ended during the last rollout. Rates/ratios are ratio-of-sums (`Σnum / max(1, Σden)`), `mean_*_rollout` are per-episode averages. No per-episode metrics. Categories are kept ≤12 cards; per-object categories are exempt.
+
+| Category | Contents |
+|---|---|
+| `progress/` | episodes, ante_8_boss_wins, win_rate, best/mean ante + round |
+| `ante_reached/` | episodes reaching ante 2–8 |
+| `blinds/` | clears, boss clears, skips, clear/boss/skip rates, mean_hands_per_clear, deadliest_death_rate |
+| `first_blind/` | ante 1 round 1 clears and one-shots (+ rates) |
+| `scoring/`, `hand_play/`, `money/`, `shop/` | scores + personal-best bonuses; plays/discards/deck size; gold earned/spent/held; visits, rerolls, voucher purchase rate, boss rerolls |
+| `deck/` | enhanced/sealed/editioned/upgrades/upgrade_pct: run-end rollout mean + all-time per-run best |
+| `boosters/`, `tags/` | packs offered/bought/opened/picked/skipped/bought-then-skipped + buy rate, pick:skip, skip rate; tags acquired by source (skip/double/anaglyph/diet_cola) |
+| `jokers/`, `joker_tenure/`, `consumables/` | gained/purchased/sold/end count + buy:sell, gain:sell, mean contribution at sell, upgrades; rounds held; used/failed/sold + rates |
+| Per-object | `blind_by_name/`, `voucher_by_name/`, `booster_by_type/`, `tag_by_name/`, `joker_by_name/`, `hand_<type>/`, `consumable_<type>/` |
+
+Tag, booster and boss-reroll counts come from `RLBridge/stats.lua` (read-only wrappers on `add_tag`, `skip_blind`, `Card:open`, `use_card`, `skip_booster`, `get_pack('shop_pack')`, `reroll_boss`), exported in `run_stats.tags` / `run_stats.packs` / `run_stats.boss_rerolls`. Per-joker `contribution`, `score_share`, `value_score`, `triggered_last_hand`, `upgrades`, `dollars_generated`, `cards_created` come from `RLBridge/joker_tracker.lua` (wrappers on `Card:calculate_joker`, `Card:get_edition`, `Card:calculate_dollar_bonus`, `ease_dollars`, `G.FUNCS.evaluate_play`, `new_round`) and are exported on each joker; run total upgrades in `run_stats.joker_upgrades`. The deadliest blind's name is printed in the policy-update CLI line.
 
 ## Communication with Claude
 - Please keep chats as efficient as possible and brief. No fluff talk, just get to the point

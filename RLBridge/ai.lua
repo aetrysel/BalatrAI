@@ -20,6 +20,7 @@ local retry_count = 0
 local blind_forced = false
 local blind_force_timer = 0
 local win_screen_shown = false
+local win_overlay_handled = false
 
 local SHOP_DEBUG = false -- Set to true to enable shop state debug logging
 
@@ -29,6 +30,7 @@ local function is_pack_state(state)
         or state == G.STATES.SPECTRAL_PACK
         or state == G.STATES.STANDARD_PACK
         or state == G.STATES.BUFFOON_PACK
+        or (G.STATES.SMODS_BOOSTER_OPENED ~= nil and state == G.STATES.SMODS_BOOSTER_OPENED)
 end
 
 --- Initialize AI system
@@ -36,6 +38,8 @@ end
 --- @return nil
 function AI.init()
     communication.init()
+    require("stats").install()
+    require("joker_tracker").install()
 
     -- Hook into Love2D keyboard events
     if love and love.keypressed then
@@ -65,8 +69,24 @@ function AI.update()
         end
         return
     end
-    if G.CONTROLLER.locking_buttons or G.CONTROLLER.interrupt_inputs or G.CONTROLLER.locks[1] then
-        return 
+    -- Win overlay ("You Win!"): endless dismisses it and keeps playing, otherwise go to menu for a new run
+    if G.STATE == G.STATES.MENU then
+        win_overlay_handled = false
+    elseif G.GAME and G.GAME.won and G.OVERLAY_MENU and not win_overlay_handled then
+        win_overlay_handled = true
+        G.FUNCS.exit_overlay_menu()
+        if utils.get_run_config().endless then
+            utils.log_ai("Win overlay dismissed — continuing in endless mode")
+        else
+            utils.log_ai("Win overlay — returning to menu for a new run")
+            G.FUNCS.go_to_menu()
+        end
+        last_combined_hash = nil
+        return
+    end
+    -- Allow pack states through even if controller is locked (card deal animations set locking_buttons)
+    if not is_pack_state(G.STATE) and (G.CONTROLLER.locking_buttons or G.CONTROLLER.interrupt_inputs or G.CONTROLLER.locks[1]) then
+        return
     end
     if last_key_pressed then
         if last_key_pressed == "r" then
@@ -178,6 +198,9 @@ function AI.update()
                 utils.log_ai("Action executed successfully: " .. pending_action.action)
                 retry_count = 0
                 pending_action = nil
+                -- Re-request even if the action left the observed state unchanged
+                -- (e.g. re-selecting the same hand cards inside a pack)
+                last_combined_hash = nil
                 utils.log_ai("\n\n\n")
             else
                 utils.log_ai("Action failed: " .. (result.error or "Unknown error"))
@@ -356,16 +379,10 @@ function AI.execute_auto_skip_action(current_state, available_actions)
     
     local exec_params = {}
     if action_id == 4 then
-        local config_path = "/tmp/balatro_run_config.json"
-        local f = io.open(config_path, "r")
-        if f then
-            local dkjson = require("dkjson")
-            local config = dkjson.decode(f:read("*all"))
-            f:close()
-            if config then
-                exec_params.seed = config.seed
-                exec_params.deck = config.deck
-            end
+        local config = utils.get_run_config(true)
+        if config then
+            exec_params.seed = config.seed
+            exec_params.deck = config.deck
         end
     end
     local result = action.execute_action(action_id, exec_params)

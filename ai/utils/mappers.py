@@ -5,6 +5,7 @@ Mappers for converting between Balatro game data and RL-compatible formats.
 import numpy as np
 from typing import Dict, List, Any
 from ..utils.validation import GameStateValidator, ResponseValidator
+from ..utils.constants import PACK_STATE_IDS, SHOP_STATE_ID, TENURE_CAP
 import logging
 
 
@@ -123,9 +124,9 @@ def item_id_norm(name: str) -> float:
 
 class BalatroStateMapper:
     """
-    Converts raw Balatro game state JSON to a 417-dimensional RL observation.
+    Converts raw Balatro game state JSON to a 440-dimensional RL observation.
 
-    Layout (417 total):
+    Layout (440 total):
       2  round (hands_left, discards_left)
       1  blind_chips
       1  chips
@@ -138,17 +139,18 @@ class BalatroStateMapper:
       1  game_win
       1  retry_count
      16  deck name one-hot
-     20  jokers (5 × 4: occupied, name_id, sell_cost_norm, edition_id)
-     10  consumables held (5 × 2: occupied, name_id)
+     35  jokers (5 × 7: occupied, name_id, sell_cost_norm, edition_id, rounds_held_norm,
+                 contribution, triggered_last_hand)
+     20  consumables held (5 × 4: occupied, name_id, max_highlighted_norm, can_use)
      21  shop (4 joker × 3 + 1 voucher × 3 + 2 booster × 3)
      10  pack_cards (5 × 2: occupied, name_id)
      17  deck stats (size + 4 seals + 8 enhancements + 4 editions)
     254  hand features
      16  current_hand scoring
-     17  available actions mask
+     20  available actions mask
     """
 
-    OBSERVATION_SIZE = 412
+    OBSERVATION_SIZE = 440
 
     def __init__(self, observation_size: int, max_actions: int):
         self.observation_size = observation_size
@@ -224,9 +226,12 @@ class BalatroStateMapper:
                 features.append(item_id_norm(j.get('name', '')))
                 features.append(normalize(float(j.get('sell_cost', 0)), 20.0))
                 features.append(EDITION_IDS.get(j.get('edition', 'none'), 0) / MAX_EDITION_ID)
+                features.append(normalize(float(j.get('rounds_held', 0)), float(TENURE_CAP)))
+                features.append(float(j.get('contribution', 0.0)))
+                features.append(1.0 if j.get('triggered_last_hand') else 0.0)
             else:
-                features.extend([0.0, 0.0, 0.0, 0.0])
-        return features  # 5 × 4 = 20
+                features.extend([0.0] * 7)
+        return features  # 5 × 7 = 35
 
     def _extract_consumable_features(self, consumables: List[Dict[str, Any]]) -> List[float]:
         features = []
@@ -235,9 +240,11 @@ class BalatroStateMapper:
                 c = consumables[i]
                 features.append(1.0)
                 features.append(item_id_norm(c.get('name', '')))
+                features.append(normalize(float(c.get('max_highlighted', 0)), 5.0))
+                features.append(1.0 if c.get('can_use') else 0.0)
             else:
-                features.extend([0.0, 0.0])
-        return features  # 5 × 2 = 10
+                features.extend([0.0] * 4)
+        return features  # 5 × 4 = 20
 
     def _extract_shop_features(self, shop_items: List[Dict[str, Any]]) -> List[float]:
         joker_slots: List[Dict] = []
@@ -394,16 +401,16 @@ class BalatroActionMapper:
             14: 15,  # SELECT_PACK_CARD
             15: 16,  # SKIP_BOOSTER
             16: 17,  # SKIP_BLIND
+            17: 18,  # BUY_AND_USE_CONSUMABLE
+            18: 19,  # SELL_CONSUMABLE
+            19: 20,  # REROLL_BOSS
         }
-
-        SHOP_STATE = 5
-        PACK_STATES = {9, 10, 15, 17, 18}
 
         balatro_action_id = ai_to_balatro_mapping.get(ai_action, 1)
 
-        if state_id in PACK_STATES:
+        if state_id in PACK_STATE_IDS:
             params = self._extract_pack_params(rl_action, balatro_action_id)
-        elif state_id == SHOP_STATE:
+        elif state_id == SHOP_STATE_ID:
             params = self._extract_shop_params(rl_action, balatro_action_id)
         else:
             params = self._extract_play_params(rl_action, balatro_action_id)
@@ -417,9 +424,11 @@ class BalatroActionMapper:
         return response_data
 
     def _extract_play_params(self, raw_action: np.ndarray, balatro_action_id: int) -> List[int]:
-        if balatro_action_id == 14:  # USE_CONSUMABLE
+        if balatro_action_id in (14, 19):  # USE_CONSUMABLE, SELL_CONSUMABLE
             consumable_slot = raw_action[self.slices["consumable_slot"]].tolist()[0]
             return [consumable_slot + 1]
+        if balatro_action_id == 8:  # SELL_JOKER
+            return [raw_action[self.slices["joker_slot"]].tolist()[0] + 1]
         card_indices = raw_action[self.slices["card_indices"]]
         return [i + 1 for i, val in enumerate(card_indices) if val == 1]
 
@@ -430,9 +439,20 @@ class BalatroActionMapper:
             return [rl_action[self.slices["joker_slot"]].tolist()[0] + 1]
         elif balatro_action_id == 13:  # BUY_BOOSTER
             return [rl_action[self.slices["shop_slot"]].tolist()[0] + 1]
+        elif balatro_action_id == 18:  # BUY_AND_USE_CONSUMABLE
+            return [rl_action[self.slices["shop_slot"]].tolist()[0] + 1]
+        elif balatro_action_id in (14, 19):  # USE_CONSUMABLE, SELL_CONSUMABLE
+            return [rl_action[self.slices["consumable_slot"]].tolist()[0] + 1]
         return []
 
     def _extract_pack_params(self, rl_action: np.ndarray, balatro_action_id: int) -> List[int]:
         if balatro_action_id == 15:  # SELECT_PACK_CARD
             return [rl_action[self.slices["pack_card_slot"]].tolist()[0] + 1]
+        elif balatro_action_id in (14, 19):  # USE_CONSUMABLE, SELL_CONSUMABLE
+            return [rl_action[self.slices["consumable_slot"]].tolist()[0] + 1]
+        elif balatro_action_id == 8:  # SELL_JOKER
+            return [rl_action[self.slices["joker_slot"]].tolist()[0] + 1]
+        elif balatro_action_id == 1:  # SELECT_HAND: target hand cards for a tarot/spectral
+            card_indices = rl_action[self.slices["card_indices"]]
+            return [i + 1 for i, val in enumerate(card_indices) if val == 1]
         return []

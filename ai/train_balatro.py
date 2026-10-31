@@ -21,6 +21,7 @@ from pathlib import Path
 
 # SB3 imports
 from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.logger import configure as configure_sb3_logger
 from stable_baselines3.common.monitor import Monitor
 
 # SB3 Contrib for action masking
@@ -34,6 +35,9 @@ from .utils.mappers import DECK_NAMES
 
 DEFAULT_TRAINING_STEPS = 10000
 SEEDS_CONFIG_PATH = Path(__file__).parent / "config" / "seeds.json"
+LAST_SESSION_PATH = Path(__file__).parent / "config" / "last_session.json"
+MODELS_DIR = Path("./models")
+LOGS_ROOT = Path("./logs")
 
 
 # --- Seed persistence ---
@@ -147,15 +151,23 @@ def select_training_steps() -> int:
         print("  Enter a positive integer.")
 
 
+
+
 def select_debug_mode() -> bool:
     """Prompt for debug mode (faster policy updates). Returns True if debug."""
     choice = input("Debug mode — faster policy updates for testing? (y/N): ").strip().lower()
     return choice == "y"
 
 
-def write_run_config(seed: str | None, deck: str) -> None:
-    """Write seed and deck to a config file that the Lua mod reads for auto-skip START_RUN."""
-    config = {"seed": seed, "deck": deck}
+def select_endless_mode() -> bool:
+    """Prompt for endless mode (keep playing past the ante 8 boss). Returns True if endless."""
+    choice = input("Endless run? (y/N): ").strip().lower()
+    return choice == "y"
+
+
+def write_run_config(seed: str | None, deck: str, endless: bool) -> None:
+    """Write seed, deck and endless flag to a config file that the Lua mod reads for auto-skip START_RUN."""
+    config = {"seed": seed, "deck": deck, "endless": endless}
     if os.name == "nt":
         appdata = os.getenv("APPDATA", "")
         path = Path(appdata) / "Balatro" / "Mods" / "RLBridge" / "run_config.json"
@@ -169,17 +181,43 @@ def write_run_config(seed: str | None, deck: str) -> None:
 # --- Run directory helpers (unchanged) ---
 
 def get_next_run_number(models_dir: Path) -> int:
-    """Scan existing run_N_* directories and return the next run number."""
-    existing = [d for d in models_dir.iterdir() if d.is_dir() and d.name.startswith("run_")]
+    """Scan existing NNN_* and legacy run_N_* directories and return the next run number."""
     nums = []
-    for d in existing:
+    for d in models_dir.iterdir():
+        if not d.is_dir():
+            continue
         parts = d.name.split("_")
-        if len(parts) >= 2:
-            try:
-                nums.append(int(parts[1]))
-            except ValueError:
-                pass
+        token = parts[1] if d.name.startswith("run_") and len(parts) >= 2 else parts[0]
+        try:
+            nums.append(int(token))
+        except ValueError:
+            pass
     return max(nums, default=0) + 1
+
+
+def sanitize_name(name: str, fallback: str) -> str:
+    """'My cool run!' → 'My_cool_run'."""
+    return "_".join("".join(c if c.isalnum() or c in "-_" else " " for c in name).split()) or fallback
+
+
+def make_run_name(run_num: int, name: str) -> str:
+    """Shared name for the model dir, TB entry and history logs: NNN_Custom_Name_YYYYMMDD_HHMMSS."""
+    return f"{run_num:03d}_{sanitize_name(name, 'run')}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+
+def is_run_dir(d: Path) -> bool:
+    """models/ subdir that holds a run: NNN_name_ts or legacy run_N_ts."""
+    return d.is_dir() and (d.name.startswith("run_") or d.name[:3].isdigit())
+
+
+def latest_checkpoint(run_dir: Path) -> Path | None:
+    """Most recently written checkpoint in a run directory, or None."""
+    checkpoints = sorted(
+        run_dir.glob("balatro_model_*_steps.zip"),
+        key=lambda f: f.stat().st_mtime,
+        reverse=True,
+    )
+    return checkpoints[0] if checkpoints else None
 
 
 def pick_run_to_resume(models_dir: Path):
@@ -189,20 +227,16 @@ def pick_run_to_resume(models_dir: Path):
     Returns (None, None) if the user cancels.
     """
     run_dirs = sorted(
-        [d for d in models_dir.iterdir() if d.is_dir() and d.name.startswith("run_")],
+        [d for d in models_dir.iterdir() if is_run_dir(d)],
         key=lambda d: d.stat().st_mtime,
         reverse=True,
     )
 
     runs_with_checkpoints = []
     for run_dir in run_dirs:
-        checkpoints = sorted(
-            run_dir.glob("balatro_model_*_steps.zip"),
-            key=lambda f: f.stat().st_mtime,
-            reverse=True,
-        )
-        if checkpoints:
-            runs_with_checkpoints.append((run_dir, checkpoints[0]))
+        ckpt = latest_checkpoint(run_dir)
+        if ckpt:
+            runs_with_checkpoints.append((run_dir, ckpt))
 
     if not runs_with_checkpoints:
         return None, None
@@ -210,7 +244,7 @@ def pick_run_to_resume(models_dir: Path):
     print("\n📂 Available runs:")
     for i, (run_dir, ckpt) in enumerate(runs_with_checkpoints):
         print(f"  [{i + 1}] {run_dir.name}  (latest: {ckpt.name})")
-    print(f"  [0] Cancel — start fresh instead")
+    print(f"  [0] Cancel")
 
     while True:
         choice = input("Select run to resume: ").strip()
@@ -224,6 +258,216 @@ def pick_run_to_resume(models_dir: Path):
         except ValueError:
             pass
         print(f"  Enter a number between 0 and {len(runs_with_checkpoints)}")
+
+
+def select_model(models_dir: Path) -> tuple[str | None, str]:
+    """
+    New named run or continue a prior one.
+    Returns (resume_run_dir_name, "") to continue, or (None, custom_name) for a new run.
+    """
+    has_runs = any(latest_checkpoint(d) for d in models_dir.iterdir() if is_run_dir(d))
+    while True:
+        print("\nModel:")
+        print("  [N] New named run")
+        if has_runs:
+            print("  [C] Continue a prior run")
+        choice = input("Select (default: N): ").strip().upper()
+        if choice in ("", "N"):
+            name = input("  Run name: ").strip()
+            print(f"  → models/{make_run_name(get_next_run_number(models_dir), name)}  (timestamp set at launch)")
+            return None, sanitize_name(name, "run")
+        if choice == "C" and has_runs:
+            _, run_dir = pick_run_to_resume(models_dir)
+            if run_dir is not None:
+                return run_dir.name, ""
+            continue
+        print("  Invalid choice.")
+
+
+def find_run_log_group(run_name: str) -> str | None:
+    """Log group that already holds this run's TensorBoard entry (latest group if several)."""
+    groups = [g for g in list_log_groups(LOGS_ROOT) if (g / "tensorboard" / run_name).is_dir()]
+    return groups[-1].name if groups else None
+
+
+def next_session_number(run_name: str) -> int:
+    """Next history session number for a run, scanning every log group's history/ dir."""
+    nums = []
+    for path in LOGS_ROOT.glob(f"*/history/{run_name}_session_*.log"):
+        try:
+            nums.append(int(path.stem.rsplit("_", 1)[1]))
+        except (IndexError, ValueError):
+            pass
+    return max(nums, default=0) + 1
+
+
+# --- Log groups: logs/NNN_name/{tensorboard,history}/ ---
+
+def list_log_groups(logs_root: Path) -> list[Path]:
+    """Existing NNN_name log groups, oldest first."""
+    if not logs_root.exists():
+        return []
+    return sorted(d for d in logs_root.iterdir() if d.is_dir() and d.name[:3].isdigit())
+
+
+def create_log_group(logs_root: Path, name: str) -> Path:
+    """Create logs/NNN_name with tensorboard/ and history/ subdirs, numbered after the latest group."""
+    nums = [int(d.name[:3]) for d in list_log_groups(logs_root)]
+    group = logs_root / f"{max(nums, default=0) + 1:03d}_{sanitize_name(name, 'logs')}"
+    (group / "tensorboard").mkdir(parents=True, exist_ok=True)
+    (group / "history").mkdir(parents=True, exist_ok=True)
+    return group
+
+
+def select_log_group(logs_root: Path, default: str | None = None) -> str:
+    """Pick an existing log group (default: given group, else latest) or create a new one. Returns the group dir name."""
+    groups = list_log_groups(logs_root)
+    print("\nLog group (holds TensorBoard + history logs for one feature change):")
+    if not groups:
+        name = input("  No log groups yet — new log group name: ").strip()
+        group = create_log_group(logs_root, name)
+        print(f"  Created {group}")
+        return group.name
+    for i, g in enumerate(groups):
+        print(f"  [{i + 1}] {g.name}")
+    print(f"  [N] New log group")
+    default = default or (groups[-1].name if groups else None)
+    while True:
+        prompt = f"Select log group (default: {default}): " if default else "Select log group: "
+        choice = input(prompt).strip().upper()
+        if choice == "" and default:
+            return default
+        if choice == "N" or choice == "":
+            name = input("  New log group name: ").strip()
+            group = create_log_group(logs_root, name)
+            print(f"  Created {group}")
+            return group.name
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(groups):
+                return groups[idx].name
+        except ValueError:
+            pass
+        print("  Invalid choice.")
+
+
+# --- Settings menu (persisted between launches) ---
+
+SETTING_LABELS = [
+    ("seed",           "Seed"),
+    ("deck",           "Deck"),
+    ("training_steps", "Training steps"),
+    ("endless",        "Endless"),
+    ("debug",          "Debug mode"),
+    ("resume_run",     "Model"),
+    ("log_group",      "Log group"),
+]
+
+
+def load_last_settings() -> dict | None:
+    if LAST_SESSION_PATH.exists():
+        try:
+            with open(LAST_SESSION_PATH, "r") as f:
+                return json.load(f)
+        except (OSError, json.JSONDecodeError):
+            return None
+    return None
+
+
+def save_last_settings(settings: dict) -> None:
+    LAST_SESSION_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(LAST_SESSION_PATH, "w") as f:
+        json.dump(settings, f, indent=2)
+
+
+def validate_settings(settings: dict) -> dict:
+    """Drop saved values that no longer point at something on disk."""
+    run = settings.get("resume_run")
+    if run and not latest_checkpoint(MODELS_DIR / run):
+        print(f"⚠️  Saved run '{run}' has no checkpoints — switching to a fresh run.")
+        settings["resume_run"] = None
+    group = settings.get("log_group")
+    if group and not (LOGS_ROOT / group).is_dir():
+        print(f"⚠️  Saved log group '{group}' not found.")
+        settings["log_group"] = None
+    return settings
+
+
+def format_setting(key: str, settings: dict, seeds: list) -> str:
+    value = settings.get(key)
+    if key == "seed":
+        if not value:
+            return "random"
+        name = next((s["name"] for s in seeds if s["value"] == value), None)
+        return f"{name} ({value})" if name else value
+    if key in ("endless", "debug"):
+        return "ON" if value else "OFF"
+    if key == "resume_run":
+        if not value:
+            return f"new run '{settings.get('new_run_name') or 'run'}'"
+        ckpt = latest_checkpoint(MODELS_DIR / value)
+        return f"continue {value} ({ckpt.name if ckpt else 'no checkpoint'})"
+    return str(value)
+
+
+def edit_setting(key: str, settings: dict, seeds: list) -> list:
+    """Prompt for one setting. Returns the (possibly updated) seeds list."""
+    if key == "seed":
+        settings["seed"], seeds = select_seed(seeds)
+    elif key == "deck":
+        settings["deck"] = select_deck()
+    elif key == "training_steps":
+        settings["training_steps"] = select_training_steps()
+    elif key == "endless":
+        settings["endless"] = select_endless_mode()
+    elif key == "debug":
+        settings["debug"] = select_debug_mode()
+    elif key == "resume_run":
+        settings["resume_run"], settings["new_run_name"] = select_model(MODELS_DIR)
+        # Continuing a run defaults to the log group that already holds its TB entry
+        existing_group = settings["resume_run"] and find_run_log_group(settings["resume_run"])
+        if existing_group and existing_group != settings.get("log_group"):
+            print(f"  Log group → {existing_group} (holds this run's TensorBoard entry)")
+            settings["log_group"] = existing_group
+    elif key == "log_group":
+        default = settings.get("resume_run") and find_run_log_group(settings["resume_run"])
+        settings["log_group"] = select_log_group(LOGS_ROOT, default=default)
+    return seeds
+
+
+def configure_session(seeds: list) -> tuple[dict, list]:
+    """
+    Load last-used settings and show an edit menu; on first launch, prompt for everything.
+    Returns (settings, seeds).
+    """
+    defaults = {"seed": None, "deck": DECK_NAMES[0], "training_steps": DEFAULT_TRAINING_STEPS,
+                "endless": False, "debug": False, "resume_run": None, "new_run_name": "run", "log_group": None}
+    saved = load_last_settings()
+    if saved is None:
+        settings = dict(defaults)
+        for key, _ in SETTING_LABELS:
+            seeds = edit_setting(key, settings, seeds)
+    else:
+        settings = validate_settings({**defaults, **saved})
+        if not settings["log_group"]:
+            seeds = edit_setting("log_group", settings, seeds)
+
+    while True:
+        print("\n⚙️  Training settings:")
+        for i, (key, label) in enumerate(SETTING_LABELS):
+            print(f"  [{i + 1}] {label:<15} {format_setting(key, settings, seeds)}")
+        choice = input("Press Enter to accept, or enter option numbers to change (e.g. '1 3'): ").strip()
+        if choice == "":
+            return settings, seeds
+        for token in choice.replace(",", " ").split():
+            try:
+                idx = int(token) - 1
+            except ValueError:
+                idx = -1
+            if 0 <= idx < len(SETTING_LABELS):
+                seeds = edit_setting(SETTING_LABELS[idx][0], settings, seeds)
+            else:
+                print(f"  Ignoring '{token}' — enter numbers 1-{len(SETTING_LABELS)}.")
 
 
 # --- Logging ---
@@ -241,14 +485,19 @@ def setup_logging():
 
 # --- Environment and model setup ---
 
+
+# --- Environment and model setup ---
+
 def mask_fn(env):
     """Extract action mask from the environment's action_masks() method"""
     return env.action_masks()
 
 
-def create_environment(seed=None, deck="Red Deck", is_endless=False, run_label: str = ""):
+def create_environment(seed=None, deck="Red Deck", is_endless=False, run_label: str = "", run_dir: str = "",
+                       history_dir: str = "game_history_logs"):
     """Create and wrap the Balatro environment"""
-    env = BalatroEnv(seed=seed, deck=deck, is_endless=is_endless, run_label=run_label)
+    env = BalatroEnv(seed=seed, deck=deck, is_endless=is_endless, run_label=run_label, run_dir=run_dir,
+                     history_dir=history_dir)
     env = ActionMasker(env, mask_fn)
     env = Monitor(env, filename="training_monitor.csv")
     return env
@@ -276,15 +525,18 @@ def create_model(env, model_path=None, n_steps=4096):
         n_epochs=10,
         gamma=0.99,
         ent_coef=0.01,
-        tensorboard_log="./tensorboard_logs/"
     )
 
     if model_path and Path(model_path).exists():
-        model = MaskablePPO.load(model_path, env=env, tensorboard_log="./tensorboard_logs/")
-        model.n_steps = n_steps
+        model = load_model(model_path, env, n_steps)
         print(f"Loaded existing model from {model_path}")
 
     return model
+
+
+def load_model(model_path, env, n_steps):
+    """Load a checkpoint; n_steps goes through custom_objects so the rollout buffer is rebuilt at that size."""
+    return MaskablePPO.load(model_path, env=env, custom_objects={"n_steps": n_steps})
 
 
 def create_callbacks(save_freq=1000, checkpoint_dir="./models/"):
@@ -302,7 +554,7 @@ def create_callbacks(save_freq=1000, checkpoint_dir="./models/"):
     return callbacks
 
 
-def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resume_from=None, checkpoint_dir="./models/", seed=None, deck="Red Deck", is_endless=False, run_label: str = "", n_steps: int = 4096):
+def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resume_from=None, checkpoint_dir="./models/", seed=None, deck="Red Deck", is_endless=False, run_label: str = "", n_steps: int = 4096, tb_session_dir: str = "./tensorboard_logs/MaskablePPO", run_dir: str = "", history_dir: str = "game_history_logs"):
     """
     Main training function
 
@@ -313,21 +565,26 @@ def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resu
         checkpoint_dir: Directory to save checkpoints
         seed: Seed string or None for random
         deck: Deck name string
+        tb_session_dir: Exact TensorBoard run directory (appended to if it already exists)
+        history_dir: Directory for the history log of this session
     """
     logger = logging.getLogger(__name__)
     logger.info(f"Starting Balatro RL training with MaskablePPO")
     logger.info(f"Training for {total_timesteps} timesteps")
 
     try:
-        env = create_environment(seed=seed, deck=deck, is_endless=is_endless, run_label=run_label)
+        env = create_environment(seed=seed, deck=deck, is_endless=is_endless, run_label=run_label, run_dir=run_dir,
+                                 history_dir=history_dir)
 
         if resume_from and Path(resume_from).exists():
             logger.info(f"Resuming training from: {resume_from}")
-            model = MaskablePPO.load(resume_from, env=env, tensorboard_log="./tensorboard_logs/")
-            model.n_steps = n_steps
+            model = load_model(resume_from, env, n_steps)
         else:
             logger.info("Starting training from scratch")
             model = create_model(env, n_steps=n_steps)
+
+        # Exact TB directory (no SB3 _N suffix) so it pairs with the history log of the same name
+        model.set_logger(configure_sb3_logger(tb_session_dir, ["tensorboard"]))
 
         callbacks = create_callbacks(save_freq=max(1000, total_timesteps // 20), checkpoint_dir=checkpoint_dir)
 
@@ -338,7 +595,7 @@ def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resu
             total_timesteps=total_timesteps,
             callback=callbacks,
             progress_bar=True,
-            tb_log_name="claude-rewards_restructure",
+            reset_num_timesteps=not resume_from,
         )
 
         training_time = time.time() - start_time
@@ -410,37 +667,55 @@ def test_trained_model(model_path, num_episodes=5):
     return episode_rewards
 
 
+
 if __name__ == "__main__":
     setup_logging()
 
-    Path("./models").mkdir(exist_ok=True)
-    Path("./tensorboard_logs").mkdir(exist_ok=True)
+    MODELS_DIR.mkdir(exist_ok=True)
+    LOGS_ROOT.mkdir(exist_ok=True)
 
-    # --- Seed selection ---
+    # --- All prompts: settings menu (seed, deck, steps, endless, debug, model, log group, TB session) ---
     seeds = load_seeds()
-    seed_choice, seeds = select_seed(seeds)
-    print(f"Using seed: {seed_choice if seed_choice else '(none — game picks randomly)'}")
+    settings, seeds = configure_session(seeds)
 
-    # --- Deck selection ---
-    deck_choice = select_deck()
-    print(f"Using deck: {deck_choice}")
-
-    # --- Training steps ---
-    training_steps = select_training_steps()
-    print(f"Training steps: {training_steps}")
-
-    # --- Endless mode ---
-    endless_raw = input("Endless run? (y/N): ").strip().lower()
-    is_endless = (endless_raw == 'y')
-    print(f"Endless mode: {'ON' if is_endless else 'OFF (stops at ante 8 boss)'}")
-
-    # --- Debug mode ---
-    debug_mode = select_debug_mode()
-    n_steps = 128 if debug_mode else 4096
-    print(f"Policy update every: {n_steps} steps{'  (debug)' if debug_mode else ''}")
+    seed_choice = settings["seed"]
+    deck_choice = settings["deck"]
+    training_steps = settings["training_steps"]
+    is_endless = settings["endless"]
+    n_steps = 128 if settings["debug"] else 4096
 
     # Write config for the Lua mod auto-skip
-    write_run_config(seed_choice, deck_choice)
+    write_run_config(seed_choice, deck_choice, is_endless)
+
+    # --- Resolve model + log paths (one name shared by model dir, TB entry and history logs) ---
+    resume_from = None
+    if settings["resume_run"]:
+        run_name = settings["resume_run"]
+        resume_from = str(latest_checkpoint(MODELS_DIR / run_name))
+    else:
+        run_name = make_run_name(get_next_run_number(MODELS_DIR), settings["new_run_name"])
+        # Later launches continue this run by default
+        settings["resume_run"] = run_name
+    checkpoint_dir = f"./models/{run_name}/"
+    save_last_settings(settings)
+
+    group_dir = LOGS_ROOT / settings["log_group"]
+    # Same TB entry every session of a run; history gets a new file per session
+    tb_session_dir = group_dir / "tensorboard" / run_name
+    history_dir = group_dir / "history"
+    session_label = f"{run_name}_session_{next_session_number(run_name):02d}"
+
+    print(f"\nUsing seed: {seed_choice if seed_choice else '(none — game picks randomly)'}")
+    print(f"Using deck: {deck_choice}")
+    print(f"Training steps: {training_steps}")
+    print(f"Endless mode: {'ON' if is_endless else 'OFF (stops at ante 8 boss)'}")
+    print(f"Policy update every: {n_steps} steps{'  (debug)' if settings['debug'] else ''}")
+    if resume_from:
+        print(f"Resuming {Path(checkpoint_dir).name} from {Path(resume_from).name}")
+    else:
+        print(f"Starting fresh. Checkpoints → {checkpoint_dir}")
+    print(f"TensorBoard → {tb_session_dir}{'  (continuing entry)' if tb_session_dir.exists() else ''}")
+    print(f"History log → {history_dir / f'{session_label}.log'}")
 
     # Train the agent
     print("\n🎮 Starting Balatro RL Training!")
@@ -451,38 +726,7 @@ if __name__ == "__main__":
     input("Press Enter to start training then press 'R' in Balatro)...")
 
     try:
-        models_dir = Path("./models")
-        models_dir.mkdir(exist_ok=True)
-
-        # Check if any runs with checkpoints exist
-        has_runs = any(
-            list(d.glob("balatro_model_*_steps.zip"))
-            for d in models_dir.iterdir()
-            if d.is_dir() and d.name.startswith("run_")
-        ) if models_dir.exists() else False
-
-        resume_from = None
-        checkpoint_dir = None
-
-        if has_runs:
-            resume_choice = input("Resume from previous training? (y/N): ").strip().lower()
-            if resume_choice == "y":
-                ckpt, run_dir = pick_run_to_resume(models_dir)
-                if ckpt:
-                    resume_from = str(ckpt)
-                    checkpoint_dir = str(run_dir) + "/"
-                    print(f"Resuming {run_dir.name} from {ckpt.name}")
-                else:
-                    print("No run selected, starting fresh.")
-
-        if checkpoint_dir is None:
-            run_num = get_next_run_number(models_dir)
-            run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-            checkpoint_dir = f"./models/session_{run_num}_{run_id}/"
-            Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
-            print(f"Starting fresh. Checkpoints → {checkpoint_dir}")
-
-        run_label = Path(checkpoint_dir).name
+        Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
 
         model = train_agent(
             total_timesteps=training_steps,
@@ -492,13 +736,16 @@ if __name__ == "__main__":
             seed=seed_choice,
             deck=deck_choice,
             is_endless=is_endless,
-            run_label=run_label,
+            run_label=session_label,
             n_steps=n_steps,
+            tb_session_dir=str(tb_session_dir),
+            run_dir=checkpoint_dir,
+            history_dir=str(history_dir),
         )
 
         if model:
             print("\n🎉Training completed successfully! Ready for next training session.")
-            
+
     except Exception as e:
         print(f"\n❌ Training failed: {e}")
         print("Check the logs for more details.")

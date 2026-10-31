@@ -151,6 +151,63 @@ function UTIL.get_timestamp()
     return os.date("%H:%M:%S", time) .. string.format(".%03d", ms)
 end
 
+--- Check if the game is still settling a previous action and would ignore button presses
+--- Same guard the game puts on its Use/Sell/Skip buttons (controller locks or a pending stop_use)
+--- @return boolean True if inputs are currently blocked
+function UTIL.is_input_blocked()
+    return (G.CONTROLLER and (G.CONTROLLER.locked or G.CONTROLLER.locks.frame))
+        or (G.GAME and (G.GAME.STOP_USE or 0) > 0)
+        or false
+end
+
+--- Check if the game's own UI button for a card would be clickable right now
+--- Runs the button's G.FUNCS state callback (e.g. 'can_buy_and_use') against a stub UI element,
+--- so the agent is held to exactly the rules a human player sees, including SMODS/mod overrides
+--- @param func_name string Name of the G.FUNCS button-state callback
+--- @param card table Card the button belongs to
+--- @return boolean True if the button would be enabled
+function UTIL.is_button_enabled(func_name, card)
+    local func = G.FUNCS and G.FUNCS[func_name]
+    if not func or not card then return false end
+    local e = { config = { ref_table = card }, UIBox = { states = {} } }
+    local ok = pcall(func, e)
+    return ok and e.config.button ~= nil
+end
+
+--- Check if a booster pack card can be taken right now (the pack's USE / SELECT button is enabled)
+--- Consumables get USE (can_use_consumeable), or SELECT when a modded pack saves them instead;
+--- jokers and playing cards get SELECT (can_select_card)
+--- @param card table Card in G.pack_cards
+--- @return boolean True if the card's button would be enabled
+function UTIL.can_take_pack_card(card)
+    if not card or not card.ability then return false end
+    local func_name = 'can_select_card'
+    if card.ability.consumeable then
+        func_name = 'can_use_consumeable'
+        local ok, selectable = pcall(function()
+            return booster_obj and SMODS and SMODS.card_select_area
+                and SMODS.card_select_area(card, booster_obj) and card:selectable_from_pack(booster_obj)
+        end)
+        if ok and selectable then
+            func_name = 'can_select_from_booster'
+        end
+    end
+    return UTIL.is_button_enabled(func_name, card)
+end
+
+--- Check if there is room for a card bought from the shop
+--- Runs the game's check_for_buy_space with its "no space" popup silenced for the call
+--- @param card table Card in a shop area
+--- @return boolean True if the bought card would have somewhere to go
+function UTIL.has_buy_space(card)
+    if not card or not G.FUNCS or not G.FUNCS.check_for_buy_space then return false end
+    local alert = alert_no_space
+    alert_no_space = function() end
+    local ok, has_space = pcall(G.FUNCS.check_for_buy_space, card)
+    alert_no_space = alert
+    return ok and has_space == true
+end
+
 --- Check if the game is ready to accept actions (no animations/blocking events)
 --- Uses Balatro's event manager to determine if animations are playing
 --- @return boolean True if ready for actions, false if animations are playing
@@ -159,7 +216,12 @@ function UTIL.is_game_ready_for_action()
     if G.SETTINGS and G.SETTINGS.paused then
         return false
     end
-    
+
+    -- Check if the game is still settling a previous action (its buttons are disabled)
+    if UTIL.is_input_blocked() then
+        return false
+    end
+
     -- Check if there are blocking events in the queue
     if G.E_MANAGER and G.E_MANAGER.queues then
         for queue_name, queue in pairs(G.E_MANAGER.queues) do
@@ -170,13 +232,71 @@ function UTIL.is_game_ready_for_action()
             end
         end
     end
-    
+
     -- Check if state transition is complete
     if G.STATE_COMPLETE == false then
         return false
     end
-    
+
     return true
+end
+
+--- Check if ALL events in the queue are complete (including non-blocking)
+--- Used in pack states where non-blocking animation events hold card object references
+--- that become nil after Handy removes animations, causing crashes if actions fire early
+--- @return boolean True if all events are complete or queue is empty
+function UTIL.is_event_queue_empty()
+    if not G.E_MANAGER or not G.E_MANAGER.queues then return true end
+    for _, queue in pairs(G.E_MANAGER.queues) do
+        for _, event in ipairs(queue) do
+            if not event.complete then
+                return false
+            end
+        end
+    end
+    return true
+end
+
+local run_config_cache = nil
+
+--- Read the run config written by train_balatro.py ({seed, deck, endless})
+--- Cached after the first read; pass reload=true to re-read the file (done on each START_RUN)
+--- @param reload boolean|nil Force a re-read from disk
+--- @return table Config table (empty if the file is missing or invalid)
+function UTIL.get_run_config(reload)
+    if run_config_cache and not reload then
+        return run_config_cache
+    end
+    local paths = { "/tmp/balatro_run_config.json" }
+    local appdata = os.getenv("APPDATA")
+    if appdata then
+        table.insert(paths, 1, appdata .. "/Balatro/Mods/RLBridge/run_config.json")
+    end
+    run_config_cache = {}
+    for _, path in ipairs(paths) do
+        local f = io.open(path, "r")
+        if f then
+            local dkjson = require("dkjson")
+            local config = dkjson.decode(f:read("*all"))
+            f:close()
+            if type(config) == "table" then
+                run_config_cache = config
+                break
+            end
+        end
+    end
+    return run_config_cache
+end
+
+--- True when the ante 8 boss has just been defeated (same condition output.lua reports as game_win)
+--- @return boolean
+function UTIL.is_game_won_round_eval()
+    if G.STATE ~= G.STATES.ROUND_EVAL then
+        return false
+    end
+    local ante = G.GAME and G.GAME.round_resets and G.GAME.round_resets.ante or 0
+    local blind_states = G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_states
+    return ante == 9 and blind_states and blind_states.Boss == "Defeated" or false
 end
 
 return UTIL

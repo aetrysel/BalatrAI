@@ -2,8 +2,12 @@
 --- Extracts and formats game state data for AI consumption
 
 local O = {}
+local utils = require("utils")
+local stats = require("stats")
+local joker_tracker = require("joker_tracker")
 
 local last_hand_info = { handname = "None", score = 0 }
+local last_blind_name = "None"
 
 function O.get_game_state()
     local game_over = 0
@@ -16,24 +20,35 @@ function O.get_game_state()
         blind_cleared = 1
     end
 
+    local blind_name = G.GAME and G.GAME.blind and G.GAME.blind.name or "None"
+    local blind_is_boss = (G.GAME and G.GAME.blind and G.GAME.blind.boss) and 1 or 0
+    if G.STATE == G.STATES.ROUND_EVAL then
+        -- Blind:defeat() resets G.GAME.blind shortly after ROUND_EVAL starts; report the defeated blind instead
+        if blind_name == "" or blind_name == "None" then
+            blind_name = last_blind_name
+        end
+        local blind_states = G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_states
+        blind_is_boss = (blind_states and blind_states.Boss == "Defeated") and 1 or 0
+    elseif blind_name ~= "" and blind_name ~= "None" then
+        last_blind_name = blind_name
+    end
+
     local game_win = 0
     if G.STATE == G.STATES.ROUND_EVAL then
         local ante = G.GAME and G.GAME.round_resets and G.GAME.round_resets.ante or 0
-        local blind = G.GAME and G.GAME.blind or nil
-        local is_boss = blind and blind.boss or false
-        if ante == 9 and is_boss then
+        if ante == 9 and blind_is_boss == 1 then
             game_win = 1
         end
     end
 
     return {
         state = G.STATE,
-        blind_name = G.GAME and G.GAME.blind and G.GAME.blind.name or "None",
+        blind_name = blind_name,
         blind_cleared = blind_cleared,
         game_win = game_win,
         ante = G.GAME and G.GAME.round_resets and G.GAME.round_resets.ante or 1,
         round_count = G.GAME and G.GAME.round or 0,
-        blind_is_boss = (G.GAME and G.GAME.blind and G.GAME.blind.boss) and 1 or 0,
+        blind_is_boss = blind_is_boss,
         game_over = game_over,
         round = O.get_round_info(),
         blind_chips = O.get_blind_chips(),
@@ -45,13 +60,48 @@ function O.get_game_state()
         reroll_cost = G.GAME and G.GAME.current_round and G.GAME.current_round.reroll_cost or 5,
         deck_name = G.GAME and G.GAME.selected_back and G.GAME.selected_back.name or "Red",
         jokers = O.get_jokers(),
+        joker_slots_max = G.jokers and G.jokers.config and G.jokers.config.card_limit or 5,
         consumables = O.get_consumables(),
+        consumable_slots_max = G.consumeables and G.consumeables.config and G.consumeables.config.card_limit or 2,
         pack_cards = O.get_pack_cards(),
         pack_choices = G.GAME and G.GAME.pack_choices or 0,
         deck_cards = O.get_deck_cards(),
-        auto_endless_config = auto_endless,
+        auto_endless_config = utils.get_run_config().endless or false,
         shop = { items = O.get_shop_items() },
+        run_stats = O.get_run_stats(),
     }
+end
+
+-- Per-run counters the game already tracks (reset on new run)
+function O.get_run_stats()
+    local game = G.GAME
+    local rs = game and game.round_scores
+    local usage = game and game.consumeable_usage_total
+    local run_counters = stats.get()
+    return {
+        high_score = rs and rs.hand and rs.hand.amt or 0,
+        rerolls = rs and rs.times_rerolled and rs.times_rerolled.amt or 0,
+        planets_used = usage and usage.planet or 0,
+        tarots_used = usage and usage.tarot or 0,
+        spectrals_used = usage and usage.spectral or 0,
+        hands_played = game and game.hands_played or 0,
+        unused_discards = game and game.unused_discards or 0,
+        deck_size = G.playing_cards and #G.playing_cards or 0,
+        consumable_usage = O.get_consumable_usage(),
+        tags = run_counters.tags,
+        packs = run_counters.packs,
+        joker_upgrades = joker_tracker.upgrades_total(),
+        boss_rerolls = run_counters.boss_rerolls,
+    }
+end
+
+-- Per-consumable use counts this run, keyed by center key (e.g. c_medium -> {count, set})
+function O.get_consumable_usage()
+    local usage = {}
+    for key, v in pairs(G.GAME and G.GAME.consumeable_usage or {}) do
+        usage[key] = { count = v.count or 0, set = v.set or "Unknown" }
+    end
+    return usage
 end
 
 function O.get_blind_chips()
@@ -135,11 +185,21 @@ function O.get_jokers()
     local jokers = {}
     if G.jokers and G.jokers.cards then
         for i, card in ipairs(G.jokers.cards) do
+            local tracked = joker_tracker.get(card)
             table.insert(jokers, {
+                id = card.sort_id,
                 name = card.config.center.name or "Unknown",
                 sell_cost = card.sell_cost or 1,
                 slot = i,
-                edition = get_edition_str(card)
+                edition = get_edition_str(card),
+                can_sell = utils.is_button_enabled('can_sell_card', card),
+                contribution = tracked.contribution,
+                score_share = tracked.score_ema,
+                value_score = tracked.value_ema,
+                triggered_last_hand = tracked.triggered_last_hand,
+                upgrades = tracked.upgrades,
+                dollars_generated = tracked.dollars_generated,
+                cards_created = tracked.cards_created,
             })
         end
     end
@@ -150,10 +210,16 @@ function O.get_consumables()
     local consumables = {}
     if G.consumeables and G.consumeables.cards then
         for i, card in ipairs(G.consumeables.cards) do
+            local cfg = card.ability and card.ability.consumeable or {}
             table.insert(consumables, {
                 name = card.config.center.name or "Unknown",
                 item_set = (card.config.center.set or "Unknown"),
-                slot = i
+                slot = i,
+                -- Hand cards that must be highlighted to use it (0 = no selection needed)
+                max_highlighted = cfg.max_highlighted or 0,
+                min_highlighted = cfg.max_highlighted and (cfg.min_highlighted or 1) or 0,
+                can_use = utils.is_button_enabled('can_use_consumeable', card),
+                can_sell = utils.is_button_enabled('can_sell_card', card),
             })
         end
     end
@@ -176,7 +242,9 @@ function O.get_pack_cards()
             table.insert(pack_cards, {
                 name = name,
                 item_set = item_set,
-                slot = i
+                slot = i,
+                edition = get_edition_str(card),
+                usable = utils.can_take_pack_card(card),
             })
         end
     end
@@ -188,7 +256,8 @@ function O.get_deck_cards()
     if G.playing_cards then
         for _, card in ipairs(G.playing_cards) do
             local seal = card.seal or "None"
-            local enhancement = (card.ability and card.ability.name) or "Base"
+            -- Center key: "c_base" for plain cards, "m_bonus"/"m_glass"/... for enhancements
+            local enhancement = (card.config and card.config.center and card.config.center.key) or "c_base"
             table.insert(deck_info, {
                 seal = seal,
                 enhancement = enhancement,
@@ -204,12 +273,16 @@ function O.get_shop_items()
 
     if G.shop_jokers and G.shop_jokers.cards then
         for i, card in ipairs(G.shop_jokers.cards) do
+            local is_consumable = card.ability and card.ability.consumeable
             table.insert(items, {
                 name = card.config.center.name or "Unknown",
                 cost = card.cost or 999,
-                type = "joker",
+                type = is_consumable and "consumable" or "joker",
                 item_set = card.config.center.set or "Joker",
-                slot = i
+                slot = i,
+                -- Buy button enabled and there is room to keep the card
+                can_buy = utils.is_button_enabled('can_buy', card) and utils.has_buy_space(card),
+                can_buy_and_use = is_consumable and utils.is_button_enabled('can_buy_and_use', card) or false,
             })
         end
     end
@@ -221,7 +294,8 @@ function O.get_shop_items()
                 cost = card.cost or 10,
                 type = "voucher",
                 item_set = "Voucher",
-                slot = i
+                slot = i,
+                can_buy = utils.is_button_enabled('can_redeem', card),
             })
         end
     end
@@ -241,7 +315,8 @@ function O.get_shop_items()
                 item_set = "Booster",
                 slot = i,
                 pack_size = pack_size,
-                pack_choose = pack_choose
+                pack_choose = pack_choose,
+                can_buy = utils.is_button_enabled('can_open', card),
             })
         end
     end

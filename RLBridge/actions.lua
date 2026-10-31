@@ -21,51 +21,60 @@ ACTIONS.SKIP_SHOP        = 10
 ACTIONS.CASH_OUT         = 11
 
 -- Extended actions
-ACTIONS.BUY_VOUCHER      = 12
-ACTIONS.BUY_BOOSTER      = 13
-ACTIONS.USE_CONSUMABLE   = 14
-ACTIONS.SELECT_PACK_CARD = 15
-ACTIONS.SKIP_BOOSTER     = 16
-ACTIONS.SKIP_BLIND       = 17
+ACTIONS.BUY_VOUCHER            = 12
+ACTIONS.BUY_BOOSTER            = 13
+ACTIONS.USE_CONSUMABLE         = 14
+ACTIONS.SELECT_PACK_CARD       = 15
+ACTIONS.SKIP_BOOSTER           = 16
+ACTIONS.SKIP_BLIND             = 17
+ACTIONS.BUY_AND_USE_CONSUMABLE = 18
+ACTIONS.SELL_CONSUMABLE        = 19
+ACTIONS.REROLL_BOSS            = 20
 
 local ACTION_IDS = {
-    select_hand      = ACTIONS.SELECT_HAND,
-    play_hand        = ACTIONS.PLAY_HAND,
-    discard_hand     = ACTIONS.DISCARD_HAND,
-    start_run        = ACTIONS.START_RUN,
-    select_blind     = ACTIONS.SELECT_BLIND,
-    restart_run      = ACTIONS.RESTART_RUN,
-    buy_joker        = ACTIONS.BUY_JOKER,
-    sell_joker       = ACTIONS.SELL_JOKER,
-    reroll_shop      = ACTIONS.REROLL_SHOP,
-    skip_shop        = ACTIONS.SKIP_SHOP,
-    cash_out         = ACTIONS.CASH_OUT,
-    buy_voucher      = ACTIONS.BUY_VOUCHER,
-    buy_booster      = ACTIONS.BUY_BOOSTER,
-    use_consumable   = ACTIONS.USE_CONSUMABLE,
-    select_pack_card = ACTIONS.SELECT_PACK_CARD,
-    skip_booster     = ACTIONS.SKIP_BOOSTER,
-    skip_blind       = ACTIONS.SKIP_BLIND,
+    select_hand            = ACTIONS.SELECT_HAND,
+    play_hand              = ACTIONS.PLAY_HAND,
+    discard_hand           = ACTIONS.DISCARD_HAND,
+    start_run              = ACTIONS.START_RUN,
+    select_blind           = ACTIONS.SELECT_BLIND,
+    restart_run            = ACTIONS.RESTART_RUN,
+    buy_joker              = ACTIONS.BUY_JOKER,
+    sell_joker             = ACTIONS.SELL_JOKER,
+    reroll_shop            = ACTIONS.REROLL_SHOP,
+    skip_shop              = ACTIONS.SKIP_SHOP,
+    cash_out               = ACTIONS.CASH_OUT,
+    buy_voucher            = ACTIONS.BUY_VOUCHER,
+    buy_booster            = ACTIONS.BUY_BOOSTER,
+    use_consumable         = ACTIONS.USE_CONSUMABLE,
+    select_pack_card       = ACTIONS.SELECT_PACK_CARD,
+    skip_booster           = ACTIONS.SKIP_BOOSTER,
+    skip_blind             = ACTIONS.SKIP_BLIND,
+    buy_and_use_consumable = ACTIONS.BUY_AND_USE_CONSUMABLE,
+    sell_consumable        = ACTIONS.SELL_CONSUMABLE,
+    reroll_boss            = ACTIONS.REROLL_BOSS,
 }
 
 local ID_TO_ACTION = {
-    [ACTIONS.SELECT_HAND]      = "select_hand",
-    [ACTIONS.PLAY_HAND]        = "play_hand",
-    [ACTIONS.DISCARD_HAND]     = "discard_hand",
-    [ACTIONS.START_RUN]        = "start_run",
-    [ACTIONS.SELECT_BLIND]     = "select_blind",
-    [ACTIONS.RESTART_RUN]      = "restart_run",
-    [ACTIONS.BUY_JOKER]        = "buy_joker",
-    [ACTIONS.SELL_JOKER]       = "sell_joker",
-    [ACTIONS.REROLL_SHOP]      = "reroll_shop",
-    [ACTIONS.SKIP_SHOP]        = "skip_shop",
-    [ACTIONS.CASH_OUT]         = "cash_out",
-    [ACTIONS.BUY_VOUCHER]      = "buy_voucher",
-    [ACTIONS.BUY_BOOSTER]      = "buy_booster",
-    [ACTIONS.USE_CONSUMABLE]   = "use_consumable",
-    [ACTIONS.SELECT_PACK_CARD] = "select_pack_card",
-    [ACTIONS.SKIP_BOOSTER]     = "skip_booster",
-    [ACTIONS.SKIP_BLIND]       = "skip_blind",
+    [ACTIONS.SELECT_HAND]            = "select_hand",
+    [ACTIONS.PLAY_HAND]              = "play_hand",
+    [ACTIONS.DISCARD_HAND]           = "discard_hand",
+    [ACTIONS.START_RUN]              = "start_run",
+    [ACTIONS.SELECT_BLIND]           = "select_blind",
+    [ACTIONS.RESTART_RUN]            = "restart_run",
+    [ACTIONS.BUY_JOKER]              = "buy_joker",
+    [ACTIONS.SELL_JOKER]             = "sell_joker",
+    [ACTIONS.REROLL_SHOP]            = "reroll_shop",
+    [ACTIONS.SKIP_SHOP]              = "skip_shop",
+    [ACTIONS.CASH_OUT]               = "cash_out",
+    [ACTIONS.BUY_VOUCHER]            = "buy_voucher",
+    [ACTIONS.BUY_BOOSTER]            = "buy_booster",
+    [ACTIONS.USE_CONSUMABLE]         = "use_consumable",
+    [ACTIONS.SELECT_PACK_CARD]       = "select_pack_card",
+    [ACTIONS.SKIP_BOOSTER]           = "skip_booster",
+    [ACTIONS.SKIP_BLIND]             = "skip_blind",
+    [ACTIONS.BUY_AND_USE_CONSUMABLE] = "buy_and_use_consumable",
+    [ACTIONS.SELL_CONSUMABLE]        = "sell_consumable",
+    [ACTIONS.REROLL_BOSS]            = "reroll_boss",
 }
 
 local function is_pack_state()
@@ -74,12 +83,41 @@ local function is_pack_state()
         or G.STATE == G.STATES.SPECTRAL_PACK
         or G.STATE == G.STATES.STANDARD_PACK
         or G.STATE == G.STATES.BUFFOON_PACK
+        or (G.STATES.SMODS_BOOSTER_OPENED ~= nil and G.STATE == G.STATES.SMODS_BOOSTER_OPENED)
+end
+
+-- Highlighted hand cards the player chose (excludes a card forced by Cerulean Bell)
+local function chosen_highlight_count()
+    local count = 0
+    for _, card in ipairs(G.hand.highlighted) do
+        if not (card.ability and card.ability.forced_selection) then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+-- States where the joker/consumable areas are interactive and cards can be sold
+local function is_sell_state()
+    return G.STATE == G.STATES.SHOP
+        or G.STATE == G.STATES.SELECTING_HAND
+        or G.STATE == G.STATES.ROUND_EVAL
+        or G.STATE == G.STATES.BLIND_SELECT
+        or is_pack_state()
 end
 
 local action_state = {}
+-- Persists across action_state resets until state leaves pack entirely.
+-- Balatro resets pack_choices during async cleanup after skip_booster fires, which
+-- temporarily makes select_pack_card appear valid again. This flag blocks both
+-- actions for the remainder of the pack state after skip_booster is executed.
+local skip_booster_executed = false
 
 function ACTIONS.reset_state()
     action_state = {}
+    if not is_pack_state() then
+        skip_booster_executed = false
+    end
 end
 
 function ACTIONS.mark_executed(action_name)
@@ -105,6 +143,27 @@ local action_registry = {
                 and utils.is_game_ready_for_action()
         end,
     },
+    reroll_boss = {
+        execute = function(params)
+            return input.reroll_boss()
+        end,
+        -- Same condition as the game's Reroll Boss button (Director's Cut once per ante, Retcon unlimited)
+        available_when = function()
+            if G.STATE ~= G.STATES.BLIND_SELECT or not G.GAME or not G.GAME.used_vouchers then
+                return false
+            end
+            local vouchers = G.GAME.used_vouchers
+            local can_reroll = vouchers["v_retcon"]
+                or (vouchers["v_directors_cut"] and not G.GAME.round_resets.boss_rerolled)
+            return can_reroll
+                and (G.GAME.dollars - G.GAME.bankrupt_at) - 10 >= 0
+                and G.blind_select_opts ~= nil and G.blind_select_opts.boss ~= nil
+                and not (G.CONTROLLER.locks and G.CONTROLLER.locks.boss_reroll)
+                and not action_state.reroll_boss
+                and utils.is_game_ready_for_action()
+                or false
+        end,
+    },
     skip_blind = {
         execute = function(params)
             return input.skip_blind()
@@ -123,9 +182,22 @@ local action_registry = {
             return input.select_hand(params, boss_name)
         end,
         available_when = function()
-            return G.STATE == G.STATES.SELECTING_HAND and G.hand and G.hand.cards and #G.hand.highlighted <= 0 and
-                utils.is_game_ready_for_action() and
-                not action_state.select_hand
+            -- In tarot/spectral packs the agent targets hand cards; no highlight-empty check so it can re-target
+            local in_tarot_spectral = G.STATE == G.STATES.TAROT_PACK or G.STATE == G.STATES.SPECTRAL_PACK
+            -- SMODS_BOOSTER_OPENED (999) consolidates all pack types; detect tarot/spectral by card set
+            if not in_tarot_spectral and G.STATES.SMODS_BOOSTER_OPENED and G.STATE == G.STATES.SMODS_BOOSTER_OPENED then
+                if G.pack_cards and G.pack_cards.cards and #G.pack_cards.cards > 0 then
+                    local set = G.pack_cards.cards[1].config
+                        and G.pack_cards.cards[1].config.center
+                        and G.pack_cards.cards[1].config.center.set
+                    in_tarot_spectral = set == 'Tarot' or set == 'Spectral'
+                end
+            end
+            if in_tarot_spectral then
+                return G.hand and G.hand.cards and #G.hand.cards > 0 and utils.is_game_ready_for_action()
+            end
+            return G.STATE == G.STATES.SELECTING_HAND and G.hand and G.hand.cards and chosen_highlight_count() <= 0
+                and utils.is_game_ready_for_action() and not action_state.select_hand
         end,
     },
     play_hand = {
@@ -164,18 +236,28 @@ local action_registry = {
             return (G.STATE == G.STATES.GAME_OVER) and not action_state.restart_run
         end,
     },
-    -- Buys any item from G.shop_jokers by slot (jokers, tarots, planets that appear there)
+    -- Buys any joker from G.shop_jokers by slot
     buy_joker = {
         execute = function(params)
             local slot = params and params[1] or 1
             return input.buy_shop_joker_slot(slot)
         end,
         available_when = function()
-            return G.STATE == G.STATES.SHOP
+            if not (G.STATE == G.STATES.SHOP
                 and G.shop_jokers
                 and G.shop_jokers.cards
                 and #G.shop_jokers.cards > 0
                 and utils.is_game_ready_for_action()
+                and not action_state.buy_joker) then
+                return false
+            end
+            -- Same as the game's Buy button, plus room to put the card (otherwise buying is a no-op)
+            for _, card in ipairs(G.shop_jokers.cards) do
+                if utils.is_button_enabled('can_buy', card) and utils.has_buy_space(card) then
+                    return true
+                end
+            end
+            return false
         end,
     },
     sell_joker = {
@@ -184,9 +266,20 @@ local action_registry = {
             return input.sell_joker(slot)
         end,
         available_when = function()
-            return G.STATE == G.STATES.SHOP
+            if not (is_sell_state()
                 and G.jokers and #G.jokers.cards > 0
                 and utils.is_game_ready_for_action()
+                and not action_state.sell_joker
+                and not action_state.buy_joker) then
+                return false
+            end
+            -- Same as the game's Sell button (eternal jokers cannot be sold)
+            for _, card in ipairs(G.jokers.cards) do
+                if utils.is_button_enabled('can_sell_card', card) then
+                    return true
+                end
+            end
+            return false
         end,
     },
     reroll_shop = {
@@ -197,6 +290,7 @@ local action_registry = {
             return G.STATE == G.STATES.SHOP
                 and G.GAME.dollars >= G.GAME.current_round.reroll_cost
                 and utils.is_game_ready_for_action()
+                and not action_state.reroll_shop
         end,
     },
     skip_shop = {
@@ -224,8 +318,10 @@ local action_registry = {
         available_when = function()
             if G.STATE ~= G.STATES.SHOP then return false end
             if not G.shop_vouchers or not G.shop_vouchers.cards or #G.shop_vouchers.cards == 0 then return false end
+            if not utils.is_game_ready_for_action() then return false end
+            if action_state.buy_voucher then return false end
             local card = G.shop_vouchers.cards[1]
-            return card and G.GAME.dollars >= (card.cost or 10)
+            return card and utils.is_button_enabled('can_redeem', card)
         end,
     },
     buy_booster = {
@@ -235,7 +331,58 @@ local action_registry = {
         end,
         available_when = function()
             if G.STATE ~= G.STATES.SHOP then return false end
-            return G.shop_booster and G.shop_booster.cards and #G.shop_booster.cards > 0
+            if not G.shop_booster or not G.shop_booster.cards or #G.shop_booster.cards == 0 then return false end
+            if not utils.is_game_ready_for_action() then return false end
+            if action_state.buy_booster then return false end
+            for _, card in ipairs(G.shop_booster.cards) do
+                if utils.is_button_enabled('can_open', card) then return true end
+            end
+            return false
+        end,
+    },
+    buy_and_use_consumable = {
+        execute = function(params)
+            local slot = params and params[1] or 1
+            return input.buy_and_use_shop_item(slot)
+        end,
+        available_when = function()
+            if G.STATE ~= G.STATES.SHOP then return false end
+            if not G.shop_jokers or not G.shop_jokers.cards then return false end
+            if not utils.is_game_ready_for_action() then return false end
+            if action_state.buy_and_use_consumable then return false end
+            for _, card in ipairs(G.shop_jokers.cards) do
+                -- Same as the game's Buy & Use button: affordable and usable from the shop
+                -- (cards that target hand cards, e.g. Deja Vu, are not)
+                if card.ability and card.ability.consumeable and utils.is_button_enabled('can_buy_and_use', card) then
+                    return true
+                end
+            end
+            return false
+        end,
+    },
+    sell_consumable = {
+        execute = function(params)
+            local slot = params and params[1] or 1
+            return input.sell_consumable(slot)
+        end,
+        available_when = function()
+            if not ((G.STATE == G.STATES.SHOP
+                or G.STATE == G.STATES.SELECTING_HAND
+                or G.STATE == G.STATES.ROUND_EVAL
+                or G.STATE == G.STATES.BLIND_SELECT
+                or is_pack_state())
+                and G.consumeables and G.consumeables.cards and #G.consumeables.cards > 0
+                and utils.is_game_ready_for_action()
+                and not action_state.sell_consumable
+                and not action_state.buy_and_use_consumable) then
+                return false
+            end
+            for _, card in ipairs(G.consumeables.cards) do
+                if utils.is_button_enabled('can_sell_card', card) then
+                    return true
+                end
+            end
+            return false
         end,
     },
     use_consumable = {
@@ -244,10 +391,23 @@ local action_registry = {
             return input.use_consumable(slot)
         end,
         available_when = function()
-            return G.STATE == G.STATES.SELECTING_HAND
+            if not ((G.STATE == G.STATES.SELECTING_HAND
+                or G.STATE == G.STATES.SHOP
+                or G.STATE == G.STATES.ROUND_EVAL
+                or G.STATE == G.STATES.BLIND_SELECT
+                or is_pack_state())
                 and G.consumeables and G.consumeables.cards and #G.consumeables.cards > 0
                 and utils.is_game_ready_for_action()
-                and not action_state.use_consumable
+                and not action_state.use_consumable) then
+                return false
+            end
+            -- Same as the game's Use button (e.g. Medium needs exactly 1 highlighted hand card)
+            for _, card in ipairs(G.consumeables.cards) do
+                if utils.is_button_enabled('can_use_consumeable', card) then
+                    return true
+                end
+            end
+            return false
         end,
     },
     select_pack_card = {
@@ -256,19 +416,41 @@ local action_registry = {
             return input.select_pack_card(slot)
         end,
         available_when = function()
-            return is_pack_state()
+            if not (is_pack_state()
+                and not skip_booster_executed
                 and G.pack_cards and G.pack_cards.cards and #G.pack_cards.cards > 0
                 and (G.GAME.pack_choices or 0) > 0
-                and not action_state.select_pack_card
+                and utils.is_game_ready_for_action()
+                and not action_state.select_pack_card) then
+                return false
+            end
+            -- Same as the pack's USE / SELECT buttons
+            for _, card in ipairs(G.pack_cards.cards) do
+                if utils.can_take_pack_card(card) then
+                    return true
+                end
+            end
+            return false
         end,
     },
     skip_booster = {
         execute = function(params)
-            ACTIONS.reset_state()
+            skip_booster_executed = true
             return input.skip_booster()
         end,
         available_when = function()
-            return is_pack_state()
+            if not is_pack_state() then return false end
+            if skip_booster_executed then return false end
+            -- In SMODS state 999, wait for pack cards to load before allowing any actions.
+            if G.STATES.SMODS_BOOSTER_OPENED and G.STATE == G.STATES.SMODS_BOOSTER_OPENED then
+                if not (G.pack_cards and G.pack_cards.cards and #G.pack_cards.cards > 0) then
+                    return false
+                end
+            end
+            -- Only available when choices remain; pack auto-closes when pack_choices reaches 0.
+            return (G.GAME.pack_choices or 0) > 0
+                and utils.is_game_ready_for_action()
+                and not action_state.skip_booster
         end,
     },
 }
@@ -310,7 +492,7 @@ function ACTIONS.execute_action(action_id, params)
     if action_def and action_def.execute then
         local result = action_def.execute(params)
         if result.success then
-            if action_name == "play_hand" or action_name == "discard_hand" or action_name == "skip_booster" then
+            if action_name == "play_hand" or action_name == "discard_hand" then
                 ACTIONS.reset_state()
             else
                 ACTIONS.mark_executed(action_name)
