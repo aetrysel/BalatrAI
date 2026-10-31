@@ -1,5 +1,6 @@
 from stable_baselines3.common.callbacks import BaseCallback
 from collections import defaultdict, deque
+import copy
 
 # Per-run stats logged as run/episode_*, run/best_*, run/rollout_mean_*
 RUN_STAT_NAMES = [
@@ -141,6 +142,24 @@ class BalatroMetricsCallback(BaseCallback):
 
     def _mean(self, lst):
         return sum(lst) / len(lst) if lst else 0.0
+
+    def _per_env_fields(self):
+        """Per-episode accumulators and previous-step deltas that belong to a single env's stream."""
+        return [k for k in vars(self) if k == "current_run_length" or k.startswith(("episode_", "_prev_"))]
+
+    def select_env(self, env_idx):
+        """Swap in env_idx's per-episode state (async parallel collection calls this before each transition)."""
+        if not hasattr(self, "_env_states"):
+            self._env_states = {}
+            self._env_state_defaults = {k: copy.deepcopy(getattr(self, k)) for k in self._per_env_fields()}
+            self._active_env = env_idx
+        if env_idx == self._active_env:
+            return
+        self._env_states[self._active_env] = {k: getattr(self, k) for k in self._env_state_defaults}
+        state = self._env_states.get(env_idx) or copy.deepcopy(self._env_state_defaults)
+        for k, v in state.items():
+            setattr(self, k, v)
+        self._active_env = env_idx
 
     def _on_step(self) -> bool:
         dones = self.locals.get("dones", [])

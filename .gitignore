@@ -71,3 +71,7 @@ wandb/
 
 # Large reference files (don't commit decompiled game source)
 balatro-source-code/
+# Parallel training instances / monitor output
+instances/
+recordings/
+replays_w*.json

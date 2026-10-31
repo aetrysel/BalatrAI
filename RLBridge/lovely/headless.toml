@@ -1,0 +1,19 @@
+[manifest]
+version = "1.0.0"
+priority = -10
+
+[[patches]]
+[patches.module]
+source = "headless.lua"
+before = "main.lua"
+name = "headless"
+
+# Gate draw + present on HEADLESS.should_draw() (skips rendering on headless workers, captures snapshots)
+[[patches]]
+[patches.pattern]
+target = "main.lua"
+pattern = "if love.graphics and love.graphics.isActive() then"
+position = "at"
+payload = "if love.graphics and love.graphics.isActive() and require('headless').should_draw() then"
+match_indent = true
+times = 1

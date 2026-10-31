@@ -96,6 +96,21 @@ Interactive prompts will ask:
 
 Training saves checkpoints to `models/run_N_YYYYMMDD_HHMMSS/` and TensorBoard logs to `tensorboard_logs/`.
 
+## Parallel Headless Training
+
+```bash
+python -m ai.train_parallel --workers 4 --timesteps 1000000   # N headless instances, one policy
+python -m ai.monitor [--record]                               # http://localhost:8765 grid of every instance
+python -m ai.watch_live --run models/run_N_...                # GUI instance playing latest checkpoint at normal speed
+```
+
+- `ai/utils/instances.py` (`BalatroInstance`) launches each game with its own save dir (`instances/<name>/xdg`, copied from `~/.local/share/love/Balatro`) and a mods dir holding only RLBridge (from this checkout), smods and Handy (`--mod-dir`)
+- Headless = `SDL_VIDEODRIVER=offscreen` (GPU EGL context, no window) + `RLBridge/headless.lua`, which skips `love.draw()` except every `BALATRO_SNAPSHOT_SECS`, when it writes `screen.png` + `status.json`
+- Lua env vars: `BALATRO_WORKER_ID` (pipe suffix `/tmp/balatro_request_<id>`), `BALATRO_AUTOSTART`, `BALATRO_HEADLESS`, `BALATRO_GAMESPEED`, `BALATRO_ANIMATIONS`, `BALATRO_FPS_CAP`, `BALATRO_RUN_CONFIG`
+- `AsyncMaskablePPO` (`ai/async_ppo.py`) + `AsyncSubprocVecEnv` step each worker as soon as its result arrives; the only sync point is the end of a rollout. TensorBoard `parallel/*` shows throughput, barrier idle fraction, per-worker step time, instance restarts
+- `ManagedPipeIO` detects a dead/hung game; `BalatroEnv` truncates the episode and relaunches the instance on reset
+- `BalatroMetricsCallback.select_env(i)` keeps per-episode metric state separate per worker
+
 ## Key Implementation Details
 
 ### Game State Management

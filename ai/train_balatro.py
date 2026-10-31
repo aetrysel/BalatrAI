@@ -182,7 +182,9 @@ def select_tb_log_name(tb_dir: Path) -> str:
 def write_run_config(seed: str | None, deck: str) -> None:
     """Write seed and deck to a config file that the Lua mod reads for auto-skip START_RUN."""
     config = {"seed": seed, "deck": deck}
-    if os.name == "nt":
+    if os.getenv("BALATRO_RUN_CONFIG"):
+        path = Path(os.environ["BALATRO_RUN_CONFIG"])
+    elif os.name == "nt":
         appdata = os.getenv("APPDATA", "")
         path = Path(appdata) / "Balatro" / "Mods" / "RLBridge" / "run_config.json"
     else:
@@ -280,7 +282,7 @@ def create_environment(seed=None, deck="Red Deck", is_endless=False, run_label: 
     return env
 
 
-def create_model(env, model_path=None, n_steps=4096):
+def create_model(env, model_path=None, n_steps=4096, algo=MaskablePPO):
     """
     Create MaskablePPO model for training
 
@@ -288,11 +290,12 @@ def create_model(env, model_path=None, n_steps=4096):
         env: Balatro environment
         model_path: Path to load existing model (optional)
         n_steps: Steps per rollout before policy update (128 for debug, 4096 for training)
+        algo: MaskablePPO or a subclass (AsyncMaskablePPO for parallel training)
 
     Returns:
         MaskablePPO model ready for training
     """
-    model = MaskablePPO(
+    model = algo(
         "MlpPolicy",
         env,
         verbose=0,
@@ -306,7 +309,7 @@ def create_model(env, model_path=None, n_steps=4096):
     )
 
     if model_path and Path(model_path).exists():
-        model = MaskablePPO.load(model_path, env=env, tensorboard_log="./tensorboard_logs/")
+        model = algo.load(model_path, env=env, tensorboard_log="./tensorboard_logs/")
         model.n_steps = n_steps
         print(f"Loaded existing model from {model_path}")
 
