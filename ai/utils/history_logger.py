@@ -137,7 +137,7 @@ def _hand_primary_feature(hand_name: str, played_cards: list) -> str:
 
 
 class HistoryLogger:
-    def __init__(self, log_dir="game_history_logs", run_label: str = ""):
+    def __init__(self, log_dir="game_history_logs", run_label: str = "", joker_sell_mode: str = "shop"):
         Path(log_dir).mkdir(parents=True, exist_ok=True)
         if run_label:
             log_path = os.path.join(log_dir, f"{run_label}.log")
@@ -159,7 +159,8 @@ class HistoryLogger:
 
         session_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._write(f"{'='*70}")
-        self._write(f"Training session: {session_ts}" + (f"  |  Run: {run_label}" if run_label else ""))
+        self._write(f"Training session: {session_ts}" + (f"  |  Run: {run_label}" if run_label else "")
+                    + f"  |  Joker selling: {joker_sell_mode}")
         self._write(f"{'='*70}")
 
     def _write(self, line: str) -> None:

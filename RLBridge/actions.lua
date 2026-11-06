@@ -106,6 +106,20 @@ local function is_sell_state()
         or is_pack_state()
 end
 
+-- States where SELL_JOKER is allowed: run config joker_sell_mode "anytime" uses every sell state; otherwise the shop, plus a Buffoon pack while joker slots are full
+local function is_joker_sell_state()
+    if utils.get_run_config().joker_sell_mode == "anytime" then
+        return is_sell_state()
+    end
+    if G.STATE == G.STATES.SHOP then return true end
+    local buffoon = G.STATE == G.STATES.BUFFOON_PACK
+        or (G.STATES.SMODS_BOOSTER_OPENED ~= nil and G.STATE == G.STATES.SMODS_BOOSTER_OPENED
+            and G.pack_cards and G.pack_cards.cards and G.pack_cards.cards[1]
+            and G.pack_cards.cards[1].ability and G.pack_cards.cards[1].ability.set == 'Joker')
+    return buffoon and G.jokers ~= nil and G.jokers.config ~= nil
+        and #G.jokers.cards >= G.jokers.config.card_limit
+end
+
 local action_state = {}
 -- Persists across action_state resets until state leaves pack entirely.
 -- Balatro resets pack_choices during async cleanup after skip_booster fires, which
@@ -266,7 +280,7 @@ local action_registry = {
             return input.sell_joker(slot)
         end,
         available_when = function()
-            if not (is_sell_state()
+            if not (is_joker_sell_state()
                 and G.jokers and #G.jokers.cards > 0
                 and utils.is_game_ready_for_action()
                 and not action_state.sell_joker
