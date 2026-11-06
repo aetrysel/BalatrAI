@@ -220,7 +220,7 @@ The Lua `ACTIONS` module validates availability before execution and returns `{s
 ### Algorithm
 MaskablePPO (from sb3-contrib) with MlpPolicy. Key hyperparameters:
 - `n_steps`: 4096, `batch_size`: 64, `n_epochs`: 10
-- `gamma`: 0.99, `ent_coef`: 0.01, `learning_rate`: 3e-4
+- `gamma`: 0.995, `ent_coef`: 0.01, `learning_rate`: 3e-4
 
 ### Observation Space
 Shape `(527,)` float32 vector built by `ai/utils/mappers.py` (`BalatroStateMapper`). Every feature is ~0..1 (hard-capped at 2); no `VecNormalize`. `log_norm(x, cap)` = `min(1, log1p(x) / log1p(cap))`.
@@ -247,29 +247,29 @@ Shape `(527,)` float32 vector built by `ai/utils/mappers.py` (`BalatroStateMappe
 Four components (summed every step):
 
 **Inventory reward** (any state, potential-based so buy→sell nets 0):
-- Joker Φ = Σ_jokers (4 + 8 × contribution); reward = Φ(s') − Φ(s). Selling filler costs ~4, selling a carry up to 12
+- Joker Φ = Σ_jokers (4 + 8 × contribution + 1 × min(rounds_held, 4)); reward = Φ(s') − Φ(s). Buying/picking a fresh joker pays +4, each blind cleared while holding adds +1 (up to +4), selling claws it all back (filler ~4, tenured carry up to 16)
 - `contribution` (0..1) = score share EMA + value EMA from `RLBridge/joker_tracker.lua`:
   - score share per hand = 1 − e^(−c), c = log-gain of the joker's chips/mult/xmult/retriggers/edition (fraction of the hand's score lost without it); EMA α=0.3 over hands held
   - value per round = min(1, ($ generated + 3 × consumables/jokers created) / 8); EMA α=0.3 over rounds
   - Blueprint/Brainstorm get the credit for what they copy; jokers in `PASSIVE_JOKERS` (`ai/utils/constants.py`) are floored at 0.3
 - Deck Φ = 30 × upgrades / deck_size (one per enhancement, seal, edition on each card) — rewards adding upgraded cards and thinning
-- `rounds_held` (blinds cleared while holding, per `sort_id` in `BalatroEnv._annotate_joker_tenure`) is an obs feature and metric only
+- `rounds_held` (blinds cleared while holding, per `sort_id` in `BalatroEnv._annotate_joker_tenure`) is an obs feature, a metric, and the tenure term of the joker Φ (capped at `JOKER_TENURE_CAP` = 4)
 - Selling a joker with `rounds_held == 0` (any state): −1 per joker
 - Selling during SELECTING_HAND: −2 (except a consumable sell when consumable slots are full)
 - Savings on leaving the shop: +1 per $5 interest tier held (max +5 at $25)
 
 **Play reward** (any state, clipped to [−25, +120]):
 - Chip gain: up to +10
-- Blind clear: +(15 + 5 × ante); one-hand bonuses (+10/+6/+3); deck thinning +1 per card removed
+- Blind clear: +(15 + 5 × ante); hands-left bonus +3 per hand remaining; deck thinning +1 per card removed
 - Ante progression: +5 × ante; boss blind: +5 × ante
 - Money earned (non-sell sources): +0.5 × gain
-- Consumable used (from `run_stats.consumable_usage`): planet +2, tarot +4, spectral +5; no reward for acquiring or holding
+- Consumable used (from `run_stats.consumable_usage`): planet +0.5, tarot +0.5, spectral +1; no reward for acquiring or holding
 - New best single hand this run: +3 × min(1, improvement / blind_chips)
 - Game over: −15 + up to +8 progress credit
 
 **Shop reward** (tanh-scaled to ±5): no spend penalty; voucher +8; leave shop: +1 × joker slot utilization; −3 if broke with no jokers
 
-**Pack reward**: +1.5 per card taken from tarot/planet/spectral/standard packs (picks counted by the Lua `use_card` hook; buffoon picks rewarded via joker potential); −1.5 for buying a pack and taking nothing (waived with Red Card)
+**Pack reward**: +0.25 per card taken from tarot/planet/spectral/standard packs (picks counted by the Lua `use_card` hook; buffoon picks rewarded via joker potential); −0.5 for buying a pack and taking nothing (waived with Red Card)
 
 Step total clipped to [−30, +120]. No `VecNormalize`; SB3 normalizes advantages per batch.
 

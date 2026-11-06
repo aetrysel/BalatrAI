@@ -534,7 +534,7 @@ def create_model(env, model_path=None, n_steps=4096):
         n_steps=n_steps,
         batch_size=64,
         n_epochs=10,
-        gamma=0.99,
+        gamma=0.995,
         ent_coef=0.01,
     )
 

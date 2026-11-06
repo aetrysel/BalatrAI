@@ -4,9 +4,11 @@ from ..utils.constants import (PACK_STATE_IDS, SHOP_STATE_ID, SELECTING_HAND_STA
                                PASSIVE_JOKERS, PASSIVE_CONTRIBUTION_FLOOR)
 
 # Inventory potential weights: reward = Φ(s') - Φ(s), so buy→sell nets zero
-# Joker potential grows with the joker's measured contribution (score share + value generated, 0..1)
+# Joker potential = base + contribution term (score share + value generated, 0..1) + tenure term (blinds cleared while held)
 JOKER_BASE_POTENTIAL = 4.0
 JOKER_CONTRIBUTION_POTENTIAL = 8.0
+JOKER_TENURE_POTENTIAL = 1.0  # per blind cleared while held
+JOKER_TENURE_CAP = 4          # blinds counted toward the tenure term
 # Deck potential: upgrades (enhancement/seal/edition, one each) as a fraction of deck size
 DECK_QUALITY_POTENTIAL = 30.0
 MID_BLIND_SELL_PENALTY = 2.0
@@ -14,9 +16,10 @@ FRESH_SELL_PENALTY = 1.0  # selling a joker before it has been held through a bl
 SAVINGS_TIER_BONUS = 1.0  # per $5 interest tier held when leaving the shop
 SAVINGS_TIER_CAP = 5
 MONEY_EARNED_WEIGHT = 0.5
-CONSUMABLE_USE_REWARD = {"Planet": 2.0, "Tarot": 4.0, "Spectral": 5.0}
-PACK_PICK_REWARD = 1.5      # per card taken from a tarot/planet/spectral/standard pack
-BOOSTER_SKIP_PENALTY = 1.5  # bought a pack and took nothing (waived with Red Card)
+CONSUMABLE_USE_REWARD = {"Planet": 0.5, "Tarot": 0.5, "Spectral": 1.0}
+PACK_PICK_REWARD = 0.25     # per card taken from a tarot/planet/spectral/standard pack
+BOOSTER_SKIP_PENALTY = 0.5  # bought a pack and took nothing (waived with Red Card)
+HANDS_LEFT_BONUS = 3.0       # per hand remaining when the blind is cleared
 PB_HAND_BONUS = 3.0         # × min(1, improvement / blind requirement) on a new best single hand
 
 class BalatroRewardCalculator:
@@ -98,7 +101,10 @@ class BalatroRewardCalculator:
 
     @classmethod
     def _joker_potential(cls, joker) -> float:
-        return JOKER_BASE_POTENTIAL + JOKER_CONTRIBUTION_POTENTIAL * cls._joker_contribution(joker)
+        tenure = min(max(int(joker.get('rounds_held') or 0), 0), JOKER_TENURE_CAP)
+        return (JOKER_BASE_POTENTIAL
+                + JOKER_CONTRIBUTION_POTENTIAL * cls._joker_contribution(joker)
+                + JOKER_TENURE_POTENTIAL * tenure)
 
     @staticmethod
     def deck_quality(game_state) -> Dict[str, float]:
@@ -441,20 +447,11 @@ class BalatroRewardCalculator:
 
             round_info = inner_game_state.get('round', {})
             hands_left = round_info.get('hands_left', 0)
-            hands_used = 4 - hands_left
-
-            if hands_used == 1:
-                efficiency_bonus = 10.0
-            elif hands_used == 2:
-                efficiency_bonus = 6.0
-            elif hands_used == 3:
-                efficiency_bonus = 3.0
-            else:
-                efficiency_bonus = 0.0
+            efficiency_bonus = HANDS_LEFT_BONUS * max(0, hands_left)
 
             total_blind_reward = base_reward + efficiency_bonus
             reward += total_blind_reward
-            reward_breakdown.append(f"BLIND CLEARED: +{base_reward:.1f} (base) +{efficiency_bonus:.1f} (efficiency)")
+            reward_breakdown.append(f"BLIND CLEARED: +{base_reward:.1f} (base) +{efficiency_bonus:.1f} (hands left bonus)")
 
             # Deck thinning bonus: +1 per card removed this round
             if self.pending_cards_removed > 0:
