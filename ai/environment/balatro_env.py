@@ -102,7 +102,7 @@ class BalatroEnv(gym.Env):
         ]))
 
         # Observation space
-        self.OBSERVATION_SIZE = 440
+        self.OBSERVATION_SIZE = 527
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,

@@ -223,26 +223,25 @@ MaskablePPO (from sb3-contrib) with MlpPolicy. Key hyperparameters:
 - `gamma`: 0.99, `ent_coef`: 0.01, `learning_rate`: 3e-4
 
 ### Observation Space
-Shape `(440,)` float32 vector built by `ai/utils/mappers.py` (`BalatroStateMapper`):
+Shape `(527,)` float32 vector built by `ai/utils/mappers.py` (`BalatroStateMapper`). Every feature is ~0..1 (hard-capped at 2); no `VecNormalize`. `log_norm(x, cap)` = `min(1, log1p(x) / log1p(cap))`.
 
 | Slice | Features | Count |
 |-------|----------|-------|
-| Round | hands_left, discards_left | 2 |
-| Blind | blind_chips, current chips | 2 |
-| Progress | ante (norm /8), round_count (norm /24, = `G.GAME.round`, increments on blind selection), gold (norm /100), reroll_cost (norm /10) | 4 |
-| Game state | one-hot (20) + game_over + game_win + retry_count | 23 |
-| Blind identity | blind_name_id (norm /30), blind_is_boss | 2 |
+| Round | hands_left, discards_left (each /10, capped at 2) | 2 |
+| Blind | blind_chips (`log_norm`, cap 1e6), chips as ratio to blind_chips (capped at 2, 0 if blind_chips is 0) | 2 |
+| Progress | ante (norm /8), round_count (norm /24, = `G.GAME.round`, increments on blind selection), gold (norm /100), reroll_cost (norm /10); all capped at 2 | 4 |
+| Game state | one-hot (20) + game_over + game_win + retry_count (min(n, 10) / 10) | 23 |
 | Deck | deck name one-hot | 16 |
-| Jokers | 5 slots × 7 (occupied, name_id, sell_cost, edition, rounds_held norm /6, contribution, triggered_last_hand) | 35 |
+| Jokers | 5 slots × 11 (occupied, name_id, sell_cost, edition, rounds_held norm /6, contribution, triggered_last_hand, rarity one-hot ×4 Common/Uncommon/Rare/Legendary) | 55 |
 | Consumables | 5 slots × 4 (occupied, name_id, max_highlighted norm /5, can_use) | 20 |
-| Shop | 4 joker + 1 voucher + 2 booster slots × 3 each | 21 |
-| Pack cards | 5 slots × 2 (occupied, name_id) | 10 |
-| Deck stats | size + 4 seals + 8 enhancements + 4 editions | 17 |
-| Hand | size, highlighted_count + 12 cards × 21 features | 254 |
-| Scoring | chips, mult, score + hand type one-hot × 13 | 16 |
+| Shop | 4 joker-area slots (jokers and consumables, in area slot order so slot i = BUY_JOKER slot i) + 1 voucher + 2 booster slots × 3 each (occupied, name_id, cost), then 4 joker slots × set one-hot ×4 (Joker/Tarot/Planet/Spectral), 4 joker slots × rarity one-hot ×4 (zero for non-jokers), 2 booster slots × pack type one-hot ×5 (Arcana/Celestial/Spectral/Standard/Buffoon, matched by name substring) | 63 |
+| Pack cards | 5 slots × 2 (occupied, name_id), then 5 slots × set one-hot ×5 (Joker/Tarot/Planet/Spectral/Playing) | 35 |
+| Deck stats | size (norm /60, capped at 2) + 4 seals + 8 enhancements + 4 editions (fractions of deck) | 17 |
+| Hand | size (/12), highlighted_count (/5), + 12 cards × 21 features (card nominal norm /11) | 254 |
+| Scoring | chips (`log_norm` cap 1e4), mult (`log_norm` cap 1e3), score (ratio to blind_chips, capped at 2) + hand type one-hot × 13 | 16 |
 | Action mask | 20 actions | 20 |
 
-**Note:** `blind_name` is encoded as a vocabulary index (`BLIND_NAMES` list in `mappers.py`). `blind_is_boss` is a binary flag from `G.GAME.blind.boss`. `round_count` maps `G.GAME.round` (not a career stat — it's a per-run counter reset on new run).
+**Note:** `round_count` maps `G.GAME.round` (not a career stat — it's a per-run counter reset on new run).
 
 ### Reward System (`ai/environment/reward.py`)
 Four components (summed every step):
