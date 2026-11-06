@@ -165,9 +165,15 @@ def select_endless_mode() -> bool:
     return choice == "y"
 
 
-def write_run_config(seed: str | None, deck: str, endless: bool) -> None:
-    """Write seed, deck and endless flag to a config file that the Lua mod reads for auto-skip START_RUN."""
-    config = {"seed": seed, "deck": deck, "endless": endless}
+def select_joker_sell_mode() -> str:
+    """Prompt for when SELL_JOKER is allowed. Returns "anytime" or "shop" (default)."""
+    choice = input("Joker selling — [S]hop + Buffoon pack when slots full (default) / [A]nytime: ").strip().lower()
+    return "anytime" if choice == "a" else "shop"
+
+
+def write_run_config(seed: str | None, deck: str, endless: bool, joker_sell_mode: str = "shop") -> None:
+    """Write seed, deck, endless flag and joker sell mode to a config file that the Lua mod reads for auto-skip START_RUN and action availability."""
+    config = {"seed": seed, "deck": deck, "endless": endless, "joker_sell_mode": joker_sell_mode}
     if os.name == "nt":
         appdata = os.getenv("APPDATA", "")
         path = Path(appdata) / "Balatro" / "Mods" / "RLBridge" / "run_config.json"
@@ -358,6 +364,7 @@ SETTING_LABELS = [
     ("deck",           "Deck"),
     ("training_steps", "Training steps"),
     ("endless",        "Endless"),
+    ("joker_sell_mode", "Joker selling"),
     ("debug",          "Debug mode"),
     ("resume_run",     "Model"),
     ("log_group",      "Log group"),
@@ -402,6 +409,8 @@ def format_setting(key: str, settings: dict, seeds: list) -> str:
         return f"{name} ({value})" if name else value
     if key in ("endless", "debug"):
         return "ON" if value else "OFF"
+    if key == "joker_sell_mode":
+        return "anytime" if value == "anytime" else "shop + Buffoon when full"
     if key == "resume_run":
         if not value:
             return f"new run '{settings.get('new_run_name') or 'run'}'"
@@ -420,6 +429,8 @@ def edit_setting(key: str, settings: dict, seeds: list) -> list:
         settings["training_steps"] = select_training_steps()
     elif key == "endless":
         settings["endless"] = select_endless_mode()
+    elif key == "joker_sell_mode":
+        settings["joker_sell_mode"] = select_joker_sell_mode()
     elif key == "debug":
         settings["debug"] = select_debug_mode()
     elif key == "resume_run":
@@ -441,7 +452,7 @@ def configure_session(seeds: list) -> tuple[dict, list]:
     Returns (settings, seeds).
     """
     defaults = {"seed": None, "deck": DECK_NAMES[0], "training_steps": DEFAULT_TRAINING_STEPS,
-                "endless": False, "debug": False, "resume_run": None, "new_run_name": "run", "log_group": None}
+                "endless": False, "joker_sell_mode": "shop", "debug": False, "resume_run": None, "new_run_name": "run", "log_group": None}
     saved = load_last_settings()
     if saved is None:
         settings = dict(defaults)
@@ -494,10 +505,10 @@ def mask_fn(env):
 
 
 def create_environment(seed=None, deck="Red Deck", is_endless=False, run_label: str = "", run_dir: str = "",
-                       history_dir: str = "game_history_logs"):
+                       history_dir: str = "game_history_logs", joker_sell_mode: str = "shop"):
     """Create and wrap the Balatro environment"""
     env = BalatroEnv(seed=seed, deck=deck, is_endless=is_endless, run_label=run_label, run_dir=run_dir,
-                     history_dir=history_dir)
+                     history_dir=history_dir, joker_sell_mode=joker_sell_mode)
     env = ActionMasker(env, mask_fn)
     env = Monitor(env, filename="training_monitor.csv")
     return env
@@ -554,7 +565,7 @@ def create_callbacks(save_freq=1000, checkpoint_dir="./models/"):
     return callbacks
 
 
-def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resume_from=None, checkpoint_dir="./models/", seed=None, deck="Red Deck", is_endless=False, run_label: str = "", n_steps: int = 4096, tb_session_dir: str = "./tensorboard_logs/MaskablePPO", run_dir: str = "", history_dir: str = "game_history_logs"):
+def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resume_from=None, checkpoint_dir="./models/", seed=None, deck="Red Deck", is_endless=False, run_label: str = "", n_steps: int = 4096, tb_session_dir: str = "./tensorboard_logs/MaskablePPO", run_dir: str = "", history_dir: str = "game_history_logs", joker_sell_mode: str = "shop"):
     """
     Main training function
 
@@ -567,6 +578,7 @@ def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resu
         deck: Deck name string
         tb_session_dir: Exact TensorBoard run directory (appended to if it already exists)
         history_dir: Directory for the history log of this session
+        joker_sell_mode: "shop" or "anytime" (when SELL_JOKER is available)
     """
     logger = logging.getLogger(__name__)
     logger.info(f"Starting Balatro RL training with MaskablePPO")
@@ -574,7 +586,7 @@ def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resu
 
     try:
         env = create_environment(seed=seed, deck=deck, is_endless=is_endless, run_label=run_label, run_dir=run_dir,
-                                 history_dir=history_dir)
+                                 history_dir=history_dir, joker_sell_mode=joker_sell_mode)
 
         if resume_from and Path(resume_from).exists():
             logger.info(f"Resuming training from: {resume_from}")
@@ -674,7 +686,7 @@ if __name__ == "__main__":
     MODELS_DIR.mkdir(exist_ok=True)
     LOGS_ROOT.mkdir(exist_ok=True)
 
-    # --- All prompts: settings menu (seed, deck, steps, endless, debug, model, log group, TB session) ---
+    # --- All prompts: settings menu (seed, deck, steps, endless, joker selling, debug, model, log group, TB session) ---
     seeds = load_seeds()
     settings, seeds = configure_session(seeds)
 
@@ -682,10 +694,11 @@ if __name__ == "__main__":
     deck_choice = settings["deck"]
     training_steps = settings["training_steps"]
     is_endless = settings["endless"]
+    joker_sell_mode = settings["joker_sell_mode"]
     n_steps = 128 if settings["debug"] else 4096
 
     # Write config for the Lua mod auto-skip
-    write_run_config(seed_choice, deck_choice, is_endless)
+    write_run_config(seed_choice, deck_choice, is_endless, joker_sell_mode)
 
     # --- Resolve model + log paths (one name shared by model dir, TB entry and history logs) ---
     resume_from = None
@@ -709,6 +722,7 @@ if __name__ == "__main__":
     print(f"Using deck: {deck_choice}")
     print(f"Training steps: {training_steps}")
     print(f"Endless mode: {'ON' if is_endless else 'OFF (stops at ante 8 boss)'}")
+    print(f"Joker selling: {format_setting('joker_sell_mode', settings, seeds)}")
     print(f"Policy update every: {n_steps} steps{'  (debug)' if settings['debug'] else ''}")
     if resume_from:
         print(f"Resuming {Path(checkpoint_dir).name} from {Path(resume_from).name}")
@@ -736,6 +750,7 @@ if __name__ == "__main__":
             seed=seed_choice,
             deck=deck_choice,
             is_endless=is_endless,
+            joker_sell_mode=joker_sell_mode,
             run_label=session_label,
             n_steps=n_steps,
             tb_session_dir=str(tb_session_dir),
