@@ -189,6 +189,8 @@ function O.get_jokers()
             table.insert(jokers, {
                 id = card.sort_id,
                 name = card.config.center.name or "Unknown",
+                -- 1 Common, 2 Uncommon, 3 Rare, 4 Legendary
+                rarity = (card.config and card.config.center and card.config.center.rarity) or 0,
                 sell_cost = card.sell_cost or 1,
                 slot = i,
                 edition = get_edition_str(card),
@@ -279,6 +281,8 @@ function O.get_shop_items()
                 cost = card.cost or 999,
                 type = is_consumable and "consumable" or "joker",
                 item_set = card.config.center.set or "Joker",
+                -- Joker rarity: 1 Common, 2 Uncommon, 3 Rare, 4 Legendary (0 for non-jokers)
+                rarity = (card.config and card.config.center and card.config.center.rarity) or 0,
                 slot = i,
                 -- Buy button enabled and there is room to keep the card
                 can_buy = utils.is_button_enabled('can_buy', card) and utils.has_buy_space(card),

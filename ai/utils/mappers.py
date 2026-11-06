@@ -2,6 +2,7 @@
 Mappers for converting between Balatro game data and RL-compatible formats.
 """
 
+import math
 import numpy as np
 from typing import Dict, List, Any
 from ..utils.validation import GameStateValidator, ResponseValidator
@@ -95,6 +96,13 @@ VOCAB_SIZE = len(_ALL_ITEMS)
 DECK_VOCAB: Dict[str, int] = {name: idx for idx, name in enumerate(DECK_NAMES)}
 NUM_DECKS = len(DECK_NAMES)
 
+SHOP_SET_IDS = {"Joker": 0, "Tarot": 1, "Planet": 2, "Spectral": 3}
+PACK_CARD_SET_IDS = {
+    "Joker": 0, "Tarot": 1, "Planet": 2, "Spectral": 3,
+    "Default": 4, "Enhanced": 4, "Standard": 4,  # playing cards
+}
+PACK_TYPE_KEYWORDS = ["Arcana", "Celestial", "Spectral", "Standard", "Buffoon"]
+
 EDITION_IDS = {"none": 0, "foil": 1, "holo": 2, "polychrome": 3, "negative": 4}
 MAX_EDITION_ID = 4
 
@@ -118,39 +126,59 @@ def normalize(value: float, max_value: float) -> float:
     return value / max_value if max_value > 0 else 0.0
 
 
+def log_norm(x: float, cap: float) -> float:
+    return min(1.0, math.log1p(max(x, 0.0)) / math.log1p(cap))
+
+
+def rarity_onehot(rarity: Any) -> List[float]:
+    # Rarity 1-4 (Common, Uncommon, Rare, Legendary); all zeros for anything else
+    try:
+        return make_onehot(int(rarity) - 1, 4)
+    except (ValueError, TypeError):
+        return [0.0] * 4
+
+
+def pack_type_onehot(name: str) -> List[float]:
+    for idx, keyword in enumerate(PACK_TYPE_KEYWORDS):
+        if keyword in (name or ''):
+            return make_onehot(idx, len(PACK_TYPE_KEYWORDS))
+    return [0.0] * len(PACK_TYPE_KEYWORDS)
+
+
 def item_id_norm(name: str) -> float:
     return ITEM_VOCAB.get(name, 0) / VOCAB_SIZE
 
 
 class BalatroStateMapper:
     """
-    Converts raw Balatro game state JSON to a 440-dimensional RL observation.
+    Converts raw Balatro game state JSON to a 527-dimensional RL observation.
 
-    Layout (440 total):
-      2  round (hands_left, discards_left)
-      1  blind_chips
-      1  chips
-      1  ante (norm /8)
-      1  round_count (norm /24)
-      1  gold (norm /100)
-      1  reroll_cost (norm /10)
+    Layout (527 total):
+      2  round (hands_left /10, discards_left /10, capped at 2)
+      1  blind_chips (log scale, cap 1e6)
+      1  chips (ratio to blind_chips, capped at 2)
+      1  ante (norm /8, capped at 2)
+      1  round_count (norm /24, capped at 2)
+      1  gold (norm /100, capped at 2)
+      1  reroll_cost (norm /10, capped at 2)
      20  state one-hot
       1  game_over
       1  game_win
-      1  retry_count
+      1  retry_count (norm /10, capped at 1)
      16  deck name one-hot
-     35  jokers (5 × 7: occupied, name_id, sell_cost_norm, edition_id, rounds_held_norm,
-                 contribution, triggered_last_hand)
+     55  jokers (5 × 11: occupied, name_id, sell_cost_norm, edition_id, rounds_held_norm,
+                 contribution, triggered_last_hand, rarity one-hot ×4)
      20  consumables held (5 × 4: occupied, name_id, max_highlighted_norm, can_use)
-     21  shop (4 joker × 3 + 1 voucher × 3 + 2 booster × 3)
-     10  pack_cards (5 × 2: occupied, name_id)
-     17  deck stats (size + 4 seals + 8 enhancements + 4 editions)
-    254  hand features
-     16  current_hand scoring
+     63  shop (4 joker × 3 + 1 voucher × 3 + 2 booster × 3, then 4 × set one-hot ×4,
+                 4 × rarity one-hot ×4, 2 × pack type one-hot ×5)
+     35  pack_cards (5 × 2: occupied, name_id, then 5 × set one-hot ×5)
+     17  deck stats (size /60 capped at 2 + 4 seals + 8 enhancements + 4 editions)
+    254  hand features (size /12, highlighted_count /5, card nominal /11)
+     16  current_hand scoring (chips log 1e4, mult log 1e3, score / blind_chips capped at 2)
      20  available actions mask
     """
 
-    OBSERVATION_SIZE = 440
+    OBSERVATION_SIZE = 527
 
     def __init__(self, observation_size: int, max_actions: int):
         self.observation_size = observation_size
@@ -187,16 +215,17 @@ class BalatroStateMapper:
     def _extract_game_features(self, state: Dict[str, Any]) -> List[float]:
         features = []
         features.extend(self._extract_round_features(state.get('round', {})))
-        features.append(float(state.get('blind_chips', 0)))
-        features.append(float(state.get('chips', 0)))
-        features.append(normalize(float(state.get('ante', 1)), 8.0))
-        features.append(normalize(float(state.get('round_count', 0)), 24.0))
-        features.append(normalize(float(state.get('gold', 0)), 100.0))
-        features.append(normalize(float(state.get('reroll_cost', 5)), 10.0))
+        blind_chips = float(state.get('blind_chips', 0))
+        features.append(log_norm(blind_chips, 1e6))  # cap 1e6
+        features.append(min(2.0, float(state.get('chips', 0)) / blind_chips) if blind_chips > 0 else 0.0)  # progress vs blind, cap 2
+        features.append(min(2.0, normalize(float(state.get('ante', 1)), 8.0)))  # endless ante > 8, cap 2
+        features.append(min(2.0, normalize(float(state.get('round_count', 0)), 24.0)))  # cap 2
+        features.append(min(2.0, normalize(float(state.get('gold', 0)), 100.0)))  # cap 2
+        features.append(min(2.0, normalize(float(state.get('reroll_cost', 5)), 10.0)))  # cap 2
         features.extend(make_onehot(state.get('state', 0), 20))
         features.append(float(state.get('game_over', 0)))
         features.append(float(state.get('game_win', 0)))
-        features.append(float(state.get('retry_count', 0)))
+        features.append(min(float(state.get('retry_count', 0)), 10.0) / 10.0)  # cap 10
         features.extend(self._extract_deck_name(state.get('deck_name', '')))
         features.extend(self._extract_joker_features(state.get('jokers', [])))
         features.extend(self._extract_consumable_features(state.get('consumables', [])))
@@ -204,13 +233,13 @@ class BalatroStateMapper:
         features.extend(self._extract_pack_features(state.get('pack_cards', [])))
         features.extend(self._extract_deck_stats(state.get('deck_cards', [])))
         features.extend(self._extract_hand_features(state.get('hand', {})))
-        features.extend(self._extract_current_hand_scoring(state.get('current_hand', {})))
+        features.extend(self._extract_current_hand_scoring(state.get('current_hand', {}), blind_chips))
         return features
 
     def _extract_round_features(self, round_data: Dict[str, Any]) -> List[float]:
         return [
-            float(round_data.get('hands_left', 0)),
-            float(round_data.get('discards_left', 0)),
+            min(2.0, normalize(float(round_data.get('hands_left', 0)), 10.0)),  # cap 2
+            min(2.0, normalize(float(round_data.get('discards_left', 0)), 10.0)),  # cap 2
         ]
 
     def _extract_deck_name(self, deck_name: str) -> List[float]:
@@ -224,14 +253,15 @@ class BalatroStateMapper:
                 j = jokers[i]
                 features.append(1.0)
                 features.append(item_id_norm(j.get('name', '')))
-                features.append(normalize(float(j.get('sell_cost', 0)), 20.0))
+                features.append(min(2.0, normalize(float(j.get('sell_cost', 0)), 20.0)))  # cap 2
                 features.append(EDITION_IDS.get(j.get('edition', 'none'), 0) / MAX_EDITION_ID)
-                features.append(normalize(float(j.get('rounds_held', 0)), float(TENURE_CAP)))
+                features.append(min(2.0, normalize(float(j.get('rounds_held', 0)), float(TENURE_CAP))))  # cap 2
                 features.append(float(j.get('contribution', 0.0)))
                 features.append(1.0 if j.get('triggered_last_hand') else 0.0)
+                features.extend(rarity_onehot(j.get('rarity', 0)))
             else:
-                features.extend([0.0] * 7)
-        return features  # 5 × 7 = 35
+                features.extend([0.0] * 11)
+        return features  # 5 × 11 = 55
 
     def _extract_consumable_features(self, consumables: List[Dict[str, Any]]) -> List[float]:
         features = []
@@ -240,7 +270,7 @@ class BalatroStateMapper:
                 c = consumables[i]
                 features.append(1.0)
                 features.append(item_id_norm(c.get('name', '')))
-                features.append(normalize(float(c.get('max_highlighted', 0)), 5.0))
+                features.append(min(2.0, normalize(float(c.get('max_highlighted', 0)), 5.0)))  # cap 2
                 features.append(1.0 if c.get('can_use') else 0.0)
             else:
                 features.extend([0.0] * 4)
@@ -252,42 +282,64 @@ class BalatroStateMapper:
         booster_slots: List[Dict] = []
         for item in shop_items:
             t = item.get('type', '')
-            if t == 'joker':
+            # Shop joker area holds jokers and consumables (tarot/planet/spectral)
+            if t in ('joker', 'consumable'):
                 joker_slots.append(item)
             elif t == 'voucher':
                 voucher_slots.append(item)
             elif t == 'booster':
                 booster_slots.append(item)
+        # Order by the area slot so obs slot i matches the BUY_JOKER / BUY_AND_USE slot param
+        joker_slots.sort(key=lambda it: it.get('slot', 0))
 
         features = []
+        set_features = []
+        rarity_features = []
         for i in range(4):  # shop_jokers (4 slots)
             if i < len(joker_slots):
                 item = joker_slots[i]
-                features.extend([1.0, item_id_norm(item.get('name', '')), normalize(float(item.get('cost', 0)), 20.0)])
+                features.extend([1.0, item_id_norm(item.get('name', '')), min(2.0, normalize(float(item.get('cost', 0)), 20.0))])
+                set_features.extend(make_onehot(SHOP_SET_IDS.get(item.get('item_set', ''), -1), 4))
+                if item.get('item_set') == 'Joker':
+                    rarity_features.extend(rarity_onehot(item.get('rarity', 0)))
+                else:
+                    rarity_features.extend([0.0] * 4)
             else:
                 features.extend([0.0, 0.0, 0.0])
+                set_features.extend([0.0] * 4)
+                rarity_features.extend([0.0] * 4)
         if voucher_slots:  # 1 voucher
             item = voucher_slots[0]
             features.extend([1.0, item_id_norm(item.get('name', '')), normalize(float(item.get('cost', 0)), 20.0)])
         else:
             features.extend([0.0, 0.0, 0.0])
+        pack_type_features = []
         for i in range(2):  # boosters (2 slots)
             if i < len(booster_slots):
                 item = booster_slots[i]
-                features.extend([1.0, item_id_norm(item.get('name', '')), normalize(float(item.get('cost', 0)), 10.0)])
+                features.extend([1.0, item_id_norm(item.get('name', '')), min(2.0, normalize(float(item.get('cost', 0)), 10.0))])
+                pack_type_features.extend(pack_type_onehot(item.get('name', '')))
             else:
                 features.extend([0.0, 0.0, 0.0])
-        return features  # 12 + 3 + 6 = 21
+                pack_type_features.extend([0.0] * 5)
+        features.extend(set_features)
+        features.extend(rarity_features)
+        features.extend(pack_type_features)
+        return features  # 12 + 3 + 6 + 16 + 16 + 10 = 63
 
     def _extract_pack_features(self, pack_cards: List[Dict[str, Any]]) -> List[float]:
         features = []
+        set_features = []
         for i in range(5):
             if i < len(pack_cards):
                 c = pack_cards[i]
                 features.extend([1.0, item_id_norm(c.get('name', ''))])
+                set_features.extend(make_onehot(PACK_CARD_SET_IDS.get(c.get('item_set', ''), -1), 5))
             else:
                 features.extend([0.0, 0.0])
-        return features  # 5 × 2 = 10
+                set_features.extend([0.0] * 5)
+        features.extend(set_features)
+        return features  # 5 × 2 + 5 × 5 = 35
 
     def _extract_deck_stats(self, deck_cards: List[Dict[str, Any]]) -> List[float]:
         n = max(len(deck_cards), 1)
@@ -306,7 +358,7 @@ class BalatroStateMapper:
             if ed in edition_counts:
                 edition_counts[ed] += 1
 
-        features = [normalize(len(deck_cards), 60.0)]
+        features = [min(2.0, normalize(len(deck_cards), 60.0))]  # cap 2
         for seal in ("Gold", "Red", "Blue", "Purple"):
             features.append(normalize(seal_counts[seal], n))
         for enh in ("m_bonus", "m_mult", "m_wild", "m_glass", "m_steel", "m_stone", "m_gold", "m_lucky"):
@@ -318,8 +370,8 @@ class BalatroStateMapper:
     def _extract_hand_features(self, hand: Dict[str, Any]) -> List[float]:
         features = []
         cards = hand.get('cards', [])
-        features.append(float(hand.get('size', 0)))
-        features.append(float(hand.get('highlighted_count', 0)))
+        features.append(min(2.0, normalize(float(hand.get('size', 0)), 12.0)))  # cap 2
+        features.append(min(2.0, normalize(float(hand.get('highlighted_count', 0)), 5.0)))  # cap 2
 
         for card in cards:
             card_features = [float(card.get('highlighted', False))]
@@ -333,7 +385,7 @@ class BalatroStateMapper:
             }
             value = base.get('value')
             card_features.extend(make_onehot(values_mapping.get(value, 13), 14))
-            card_features.append(base.get('nominal', 0.0))
+            card_features.append(normalize(float(base.get('nominal', 0.0)), 11.0))  # Ace nominal is 11
             features.extend(card_features)
 
         max_cards = 12
@@ -344,17 +396,21 @@ class BalatroStateMapper:
             features.extend([0.0] * (expected - len(features)))
         return features  # 254
 
-    def _extract_current_hand_scoring(self, current_hand: Dict[str, Any]) -> List[float]:
+    def _extract_current_hand_scoring(self, current_hand: Dict[str, Any], blind_chips: float = 0.0) -> List[float]:
         features = []
         try:
-            features.append(float(current_hand.get('chips', 0)))
+            features.append(log_norm(float(current_hand.get('chips', 0)), 1e4))  # cap 1e4
         except (ValueError, TypeError):
             features.append(0.0)
         try:
-            features.append(float(current_hand.get('mult', 0)))
+            features.append(log_norm(float(current_hand.get('mult', 0)), 1e3))  # cap 1e3
         except (ValueError, TypeError):
             features.append(0.0)
-        features.append(float(current_hand.get('score', 0)))
+        try:
+            score = float(current_hand.get('score', 0))
+            features.append(min(2.0, score / blind_chips) if blind_chips > 0 else 0.0)  # cap 2
+        except (ValueError, TypeError):
+            features.append(0.0)
 
         hand_types = [
             "None", "High Card", "Pair", "Two Pair", "Three of a Kind",
