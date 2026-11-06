@@ -92,11 +92,11 @@ Key packages: `gymnasium`, `stable-baselines3`, `sb3-contrib` (MaskablePPO), `to
 python -m ai.train_balatro
 ```
 
-All prompts come before "Press Enter to start training". The first launch asks for every setting; later launches load `ai/config/last_session.json` and show a settings menu — press Enter to reuse everything, or type option numbers (e.g. `1 6`) to change only those:
+All prompts come before "Press Enter to start training". The first launch asks for every setting; later launches load `ai/config/last_session.json` and show a settings menu — press Enter to reuse everything, or type option numbers (e.g. `1 7`) to change only those:
 1. **Seed** (named seeds in `ai/config/seeds.json`, or random)
-2. **Deck**, 3. **Training steps** (additional steps when resuming), 4. **Endless**, 5. **Debug mode** (`n_steps=128`)
-6. **Model**: `[N]` new named run, or `[C]` continue a prior run (latest checkpoint; `NNN_*` and legacy `run_N_*` dirs). After a new run launches, the saved setting switches to continuing it.
-7. **Log group**: an existing `logs/NNN_name/` (default: the group already holding the run's TB entry, else latest) or a new one (number auto-increments)
+2. **Deck**, 3. **Training steps** (additional steps when resuming), 4. **Endless**, 5. **Joker selling** (`shop`: shop + Buffoon pack when joker slots are full; `anytime`: any sell state), 6. **Debug mode** (`n_steps=128`)
+7. **Model**: `[N]` new named run, or `[C]` continue a prior run (latest checkpoint; `NNN_*` and legacy `run_N_*` dirs). After a new run launches, the saved setting switches to continuing it.
+8. **Log group**: an existing `logs/NNN_name/` (default: the group already holding the run's TB entry, else latest) or a new one (number auto-increments)
 
 Then start Balatro and press `R` in-game to activate the RL loop.
 
@@ -107,7 +107,7 @@ Every run has one name, `<run>` = `NNN_Custom_Name_YYYYMMDD_HHMMSS` (3-digit run
 
 Point TensorBoard at a group: `tensorboard --logdir logs/NNN_name/tensorboard`.
 
-Endless/seed/deck are passed to the mod via the run config file (`/tmp/balatro_run_config.json`, or `%APPDATA%/Balatro/Mods/RLBridge/run_config.json` on Windows), read by `UTIL.get_run_config()`. On the ante 8 win the mod dismisses the win overlay and keeps playing (endless) or returns to the menu to start a new run.
+Endless/seed/deck/joker selling are passed to the mod via the run config file (`/tmp/balatro_run_config.json`, or `%APPDATA%/Balatro/Mods/RLBridge/run_config.json` on Windows), read by `UTIL.get_run_config()`. On the ante 8 win the mod dismisses the win overlay and keeps playing (endless) or returns to the menu to start a new run.
 
 ## Key Implementation Details
 
@@ -199,7 +199,7 @@ Line-delimited JSON (one JSON object per line, terminated with `\n`).
 | 5 | SELECT_BLIND | BLIND_SELECT | none |
 | 6 | RESTART_RUN | GAME_OVER | `seed`: optional string |
 | 7 | BUY_JOKER | SHOP | `slot`: 1-based shop slot index |
-| 8 | SELL_JOKER | SHOP | `slot`: 1-based joker slot index |
+| 8 | SELL_JOKER | SHOP; Buffoon pack when joker slots full (any sell state with joker_sell_mode: anytime) | `slot`: 1-based joker slot index |
 | 9 | REROLL_SHOP | SHOP | none |
 | 10 | SKIP_SHOP | SHOP | none |
 | 11 | CASH_OUT | ROUND_EVAL | none |
