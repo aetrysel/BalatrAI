@@ -55,6 +55,8 @@ function O.get_game_state()
         hand = O.get_hand_info(),
         chips = G.GAME and G.GAME.chips or 0,
         current_hand = O.get_current_hand_scoring(),
+        -- Hand recorded at evaluation time (stats.lua); new hand when seq changes. Not subject to the poll-dependent last_handname cache
+        last_played_hand = stats.last_played_hand() or { handname = "None", score = 0, chips_before = 0, seq = 0 },
         seed = G.GAME and G.GAME.pseudorandom and G.GAME.pseudorandom.seed or 0,
         gold = O.get_gold(),
         reroll_cost = G.GAME and G.GAME.current_round and G.GAME.current_round.reroll_cost or 5,

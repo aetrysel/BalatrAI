@@ -31,6 +31,7 @@ from sb3_contrib.common.wrappers import ActionMasker
 # Our custom environment
 from .environment.balatro_env import BalatroEnv
 from .utils.callbacks import BalatroMetricsCallback
+from .utils.cli_reporter import CLIReporter, KeyListener, OutputLevel, coerce_level
 from .utils.mappers import DECK_NAMES
 
 DEFAULT_TRAINING_STEPS = 10000
@@ -157,6 +158,20 @@ def select_debug_mode() -> bool:
     """Prompt for debug mode (faster policy updates). Returns True if debug."""
     choice = input("Debug mode — faster policy updates for testing? (y/N): ").strip().lower()
     return choice == "y"
+
+
+def select_output_level() -> int:
+    """Prompt for the starting CLI output level (switchable live with keys 1-5 during training)."""
+    print("Output level (switch live during training with keys 1-5, '?' for help):")
+    for level in OutputLevel:
+        print(f"  [{int(level)}] {level.name}")
+    while True:
+        raw = input(f"Starting output level [{int(OutputLevel.ROUND)}]: ").strip()
+        if raw == "":
+            return int(OutputLevel.ROUND)
+        if raw.isdigit() and 1 <= int(raw) <= len(OutputLevel):
+            return int(raw)
+        print(f"  Enter a number 1-{len(OutputLevel)}.")
 
 
 def select_endless_mode() -> bool:
@@ -366,6 +381,7 @@ SETTING_LABELS = [
     ("endless",        "Endless"),
     ("joker_sell_mode", "Joker selling"),
     ("debug",          "Debug mode"),
+    ("output_level",   "Output level"),
     ("resume_run",     "Model"),
     ("log_group",      "Log group"),
 ]
@@ -411,6 +427,8 @@ def format_setting(key: str, settings: dict, seeds: list) -> str:
         return "ON" if value else "OFF"
     if key == "joker_sell_mode":
         return "anytime" if value == "anytime" else "shop + Buffoon when full"
+    if key == "output_level":
+        return coerce_level(value).name
     if key == "resume_run":
         if not value:
             return f"new run '{settings.get('new_run_name') or 'run'}'"
@@ -433,6 +451,8 @@ def edit_setting(key: str, settings: dict, seeds: list) -> list:
         settings["joker_sell_mode"] = select_joker_sell_mode()
     elif key == "debug":
         settings["debug"] = select_debug_mode()
+    elif key == "output_level":
+        settings["output_level"] = select_output_level()
     elif key == "resume_run":
         settings["resume_run"], settings["new_run_name"] = select_model(MODELS_DIR)
         # Continuing a run defaults to the log group that already holds its TB entry
@@ -452,7 +472,7 @@ def configure_session(seeds: list) -> tuple[dict, list]:
     Returns (settings, seeds).
     """
     defaults = {"seed": None, "deck": DECK_NAMES[0], "training_steps": DEFAULT_TRAINING_STEPS,
-                "endless": False, "joker_sell_mode": "shop", "debug": False, "resume_run": None, "new_run_name": "run", "log_group": None}
+                "endless": False, "joker_sell_mode": "shop", "debug": False, "output_level": int(OutputLevel.ROUND), "resume_run": None, "new_run_name": "run", "log_group": None}
     saved = load_last_settings()
     if saved is None:
         settings = dict(defaults)
@@ -521,7 +541,7 @@ def create_model(env, model_path=None, n_steps=4096):
     Args:
         env: Balatro environment
         model_path: Path to load existing model (optional)
-        n_steps: Steps per rollout before policy update (128 for debug, 4096 for training)
+        n_steps: Steps per rollout before policy update (512 for debug, 4096 for training)
 
     Returns:
         MaskablePPO model ready for training
@@ -550,7 +570,7 @@ def load_model(model_path, env, n_steps):
     return MaskablePPO.load(model_path, env=env, custom_objects={"n_steps": n_steps})
 
 
-def create_callbacks(save_freq=1000, checkpoint_dir="./models/"):
+def create_callbacks(save_freq=1000, checkpoint_dir="./models/", reporter=None, seeded=False):
     """Create training callbacks for saving and evaluation"""
     callbacks = []
 
@@ -560,12 +580,12 @@ def create_callbacks(save_freq=1000, checkpoint_dir="./models/"):
         name_prefix="balatro_model"
     )
     callbacks.append(checkpoint_callback)
-    callbacks.append(BalatroMetricsCallback(log_freq=10, verbose=1))
+    callbacks.append(BalatroMetricsCallback(log_freq=10, verbose=1, reporter=reporter, seeded=seeded))
 
     return callbacks
 
 
-def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resume_from=None, checkpoint_dir="./models/", seed=None, deck="Red Deck", is_endless=False, run_label: str = "", n_steps: int = 4096, tb_session_dir: str = "./tensorboard_logs/MaskablePPO", run_dir: str = "", history_dir: str = "game_history_logs", joker_sell_mode: str = "shop"):
+def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resume_from=None, checkpoint_dir="./models/", seed=None, deck="Red Deck", is_endless=False, run_label: str = "", n_steps: int = 4096, tb_session_dir: str = "./tensorboard_logs/MaskablePPO", run_dir: str = "", history_dir: str = "game_history_logs", joker_sell_mode: str = "shop", reporter=None):
     """
     Main training function
 
@@ -579,11 +599,13 @@ def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resu
         tb_session_dir: Exact TensorBoard run directory (appended to if it already exists)
         history_dir: Directory for the history log of this session
         joker_sell_mode: "shop" or "anytime" (when SELL_JOKER is available)
+        reporter: CLIReporter shared with the key listener (a default one is created if None)
     """
     logger = logging.getLogger(__name__)
     logger.info(f"Starting Balatro RL training with MaskablePPO")
     logger.info(f"Training for {total_timesteps} timesteps")
 
+    metrics_callback = None
     try:
         env = create_environment(seed=seed, deck=deck, is_endless=is_endless, run_label=run_label, run_dir=run_dir,
                                  history_dir=history_dir, joker_sell_mode=joker_sell_mode)
@@ -598,7 +620,9 @@ def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resu
         # Exact TB directory (no SB3 _N suffix) so it pairs with the history log of the same name
         model.set_logger(configure_sb3_logger(tb_session_dir, ["tensorboard"]))
 
-        callbacks = create_callbacks(save_freq=max(1000, total_timesteps // 20), checkpoint_dir=checkpoint_dir)
+        callbacks = create_callbacks(save_freq=max(1000, total_timesteps // 20), checkpoint_dir=checkpoint_dir,
+                                     reporter=reporter, seeded=seed is not None)
+        metrics_callback = next(c for c in callbacks if isinstance(c, BalatroMetricsCallback))
 
         logger.info("Starting training...")
         start_time = time.time()
@@ -625,6 +649,8 @@ def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resu
 
     except KeyboardInterrupt:
         logger.info("Training interrupted by user")
+        if metrics_callback is not None:
+            metrics_callback.print_cutoff()  # in-progress episode (CUT OFF) + final stats
         if hasattr(env, 'cleanup'):
             env.cleanup()
         elif hasattr(env.env, 'cleanup'):
@@ -695,7 +721,8 @@ if __name__ == "__main__":
     training_steps = settings["training_steps"]
     is_endless = settings["endless"]
     joker_sell_mode = settings["joker_sell_mode"]
-    n_steps = 128 if settings["debug"] else 4096
+    # n_steps = 128 if settings["debug"] else 4096  # previous debug value (too few steps per rollout for meaningful deltas)
+    n_steps = 512 if settings["debug"] else 4096
 
     # Write config for the Lua mod auto-skip
     write_run_config(seed_choice, deck_choice, is_endless, joker_sell_mode)
@@ -739,6 +766,13 @@ if __name__ == "__main__":
 
     input("Press Enter to start training then press 'R' in Balatro)...")
 
+    # Live output-level switching (keys 1-5); no-op when stdin is not a terminal
+    reporter = CLIReporter(level=coerce_level(settings.get("output_level")),
+                           seeded=seed_choice is not None)
+    key_listener = KeyListener(reporter)
+    if key_listener.start():
+        print("Output level keys active: 1-5 switch level, ? for help.")
+
     try:
         Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)
 
@@ -756,6 +790,7 @@ if __name__ == "__main__":
             tb_session_dir=str(tb_session_dir),
             run_dir=checkpoint_dir,
             history_dir=str(history_dir),
+            reporter=reporter,
         )
 
         if model:
@@ -765,5 +800,6 @@ if __name__ == "__main__":
         print(f"\n❌ Training failed: {e}")
         print("Check the logs for more details.")
     finally:
+        key_listener.stop()  # restore the terminal
         # Pipes will be cleaned up by the environment
         print("🧹 Training session ended")

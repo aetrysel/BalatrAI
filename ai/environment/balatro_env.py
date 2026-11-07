@@ -242,6 +242,7 @@ class BalatroEnv(gym.Env):
                 "blind_is_boss": current_gs.get('blind_is_boss', 0) == 1,
                 "hand_type": current_gs.get('current_hand', {}).get('last_handname', 'None'),
                 "hand_score": current_gs.get('current_hand', {}).get('last_score', 0),
+                "last_played_hand": current_gs.get('last_played_hand') or {},
                 "jokers": current_gs.get('jokers', []),
                 "consumable_count": len(current_gs.get('consumables', [])),
                 "gold": current_gs.get('gold', 0),
@@ -285,9 +286,9 @@ class BalatroEnv(gym.Env):
         game_state_early = next_request.get('game_state', {})
         if game_state_early.get('game_over', 0) == 1:
             observation = self.state_mapper.process_game_state(self.current_state)
-            # Inject game_over=1 into current_state so reward.py fires the penalty and
-            # captures game_over_blind_name/chips for CLI output, while keeping the real
-            # chip/blind values (the game-over state itself has chips=0).
+            # Inject game_over=1 into current_state so reward.py fires the game-over penalty
+            # (which needs the real blind chips/progress; the game-over state itself has chips=0).
+            # CLI output no longer reads this: it comes from the info dict via cli_reporter.
             game_over_state = {
                 **self.current_state,
                 'game_state': {**self.current_state.get('game_state', {}), 'game_over': 1}
@@ -311,6 +312,8 @@ class BalatroEnv(gym.Env):
                 "blind_is_boss": last_gs.get('blind_is_boss', 0) == 1,
                 "hand_type": last_gs.get('current_hand', {}).get('last_handname', 'None'),
                 "hand_score": last_gs.get('current_hand', {}).get('last_score', 0),
+                # The killing hand is only in the game-over state (last_gs predates it); chips there are 0
+                "last_played_hand": game_state_early.get('last_played_hand') or last_gs.get('last_played_hand') or {},
                 "jokers": last_gs.get('jokers', []),
                 "consumable_count": len(last_gs.get('consumables', [])),
                 "gold": last_gs.get('gold', 0),
@@ -362,6 +365,7 @@ class BalatroEnv(gym.Env):
             "blind_is_boss": game_state.get('blind_is_boss', 0) == 1,
             "hand_type": game_state.get('current_hand', {}).get('last_handname', 'None'),
             "hand_score": game_state.get('current_hand', {}).get('last_score', 0),
+            "last_played_hand": game_state.get('last_played_hand') or {},
             "jokers": game_state.get('jokers', []),
             "consumable_count": len(game_state.get('consumables', [])),
             "gold": game_state.get('gold', 0),

@@ -15,6 +15,8 @@ local function run_stats()
         tags = { by_key = {}, by_source = {} },
         packs = {},
         boss_rerolls = 0,
+        hand_seq = 0,  -- counts evaluate_play calls this run; last_played_hand.seq
+        last_played_hand = nil,  -- {handname, score, chips_before, seq} of the most recent evaluated hand
         pending_double = {},  -- tag key → copies Double Tags have promised but not yet added
     }
     return G.GAME.rl_stats
@@ -143,6 +145,32 @@ function STATS.install()
         return original_reroll_boss(e, ...)
     end
 
+    -- Record each hand the moment it is evaluated (evaluate_play sets G.GAME.last_hand_played synchronously),
+    -- so the clearing / killing hand's type and score never depend on poll timing
+    local original_evaluate_play = G.FUNCS.evaluate_play
+    G.FUNCS.evaluate_play = function(e, ...)
+        local stats = run_stats()
+        local chips_before = G.GAME and G.GAME.chips or 0
+        local result = original_evaluate_play(e, ...)  -- evaluate_play returns nothing in practice; kept for safety
+        if stats then
+            stats.hand_seq = (stats.hand_seq or 0) + 1
+            -- hand_chips / mult are globals set by evaluate_play
+            local hc = rawget(_G, "hand_chips")
+            local m = rawget(_G, "mult")
+            local score = 0
+            if type(hc) == "number" and type(m) == "number" then
+                score = math.floor(hc * m)
+            end
+            stats.last_played_hand = {
+                handname = G.GAME and G.GAME.last_hand_played or "None",
+                score = score,
+                chips_before = chips_before,
+                seq = stats.hand_seq,
+            }
+        end
+        return result
+    end
+
     local original_skip_booster = G.FUNCS.skip_booster
     G.FUNCS.skip_booster = function(e, ...)
         local stats = run_stats()
@@ -152,6 +180,13 @@ function STATS.install()
         end
         return original_skip_booster(e, ...)
     end
+end
+
+--- Most recently evaluated hand this run, or nil before the first hand
+--- @return table|nil {handname, score, chips_before, seq}
+function STATS.last_played_hand()
+    local stats = run_stats()
+    return stats and stats.last_played_hand or nil
 end
 
 --- Per-run tag and booster counters for output.get_run_stats()
