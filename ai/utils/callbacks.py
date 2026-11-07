@@ -1,6 +1,8 @@
 from stable_baselines3.common.callbacks import BaseCallback
 from collections import Counter, defaultdict, deque
 
+from .cli_reporter import CLIReporter, EpisodeTracker, PolicySnapshot, blind_slot
+
 # (outdated) Per-run stats logged as run/episode_*, run/best_*, run/rollout_mean_*
 # The run/* tags are no longer logged; per-episode values are now logged as rollout means, see "Metric layout" below.
 # --- Previous run stat names (unused: run/* tags were replaced by rollout-end logging) ---
@@ -41,8 +43,11 @@ DECK_PCT_FIELDS = ("enhanced", "sealed", "editioned")
 
 
 class BalatroMetricsCallback(BaseCallback):
-    def __init__(self, log_freq=10, verbose=1):
+    def __init__(self, log_freq=10, verbose=1, reporter=None, seeded=False):
         super().__init__(verbose)
+        # CLI output (episode summaries, live lines, policy-update line); seeded picks the deadliest-blind wording
+        self.reporter = reporter if reporter is not None else CLIReporter(seeded=seeded)
+        self._cutoff_done = False
         # --- Previous log_freq assignment (unused: metrics are logged once per rollout; parameter kept for callers) ---
         # self.log_freq = log_freq
 
@@ -92,6 +97,7 @@ class BalatroMetricsCallback(BaseCallback):
         # Position comes from ante + blind name, not the round counter (skipped blinds don't advance it)
         self.blind_position_clears = defaultdict(int)
         self.blind_position_deaths = defaultdict(int)
+        self.blind_position_round = {}  # last round number seen at each (ante, slot), CLI display only
         self.rollout_blind_position_clears = defaultdict(int)
         self.rollout_blind_position_deaths = defaultdict(int)
 
@@ -137,6 +143,9 @@ class BalatroMetricsCallback(BaseCallback):
         # queues ease_ante(1) before ROUND_EVAL after a boss, so the clear step already reports ante+1.
         self._blind_ante = 0
         self._prev_shop_items = []
+        # CLI: blind/hand history of the episode in progress, and its reward so far (cut-off fallback)
+        self.tracker = EpisodeTracker()
+        self.episode_reward = 0.0
 
     def _add(self, key, amount=1):
         """Add to both the all-time and the rollout counter."""
@@ -202,6 +211,7 @@ class BalatroMetricsCallback(BaseCallback):
         ante overrides info["ante"] (used for clears, where info already shows the next ante after a boss)."""
         name = info.get("blind_name", "None")
         position = (ante or info.get("ante", 0), self._blind_slot(name))
+        self.blind_position_round[position] = info.get("round", 0)
         if cleared:
             self.blind_clears_by_name[name] += 1
             self.rollout_blind_clears_by_name[name] += 1
@@ -213,13 +223,16 @@ class BalatroMetricsCallback(BaseCallback):
             self.blind_position_deaths[position] += 1
             self.rollout_blind_position_deaths[position] += 1
 
-    def _deadliest_blind(self, clears=None, deaths=None):
+    def _deadliest_blind(self, clears=None, deaths=None, boss_only=False):
         """(name, death_rate) of the blind with the highest deaths/attempts, or (None, 0).
-        Defaults to the all-time per-blind counts; pass the rollout dicts for the last rollout only."""
+        Defaults to the all-time per-blind counts; pass the rollout dicts for the last rollout only.
+        boss_only restricts the search to blinds whose slot is Boss."""
         clears = self.blind_clears_by_name if clears is None else clears
         deaths = self.blind_deaths_by_name if deaths is None else deaths
         best = (None, 0.0)
         for name in set(clears) | set(deaths):
+            if boss_only and blind_slot(name) != "Boss":
+                continue
             attempts = clears[name] + deaths[name]
             if attempts < DEADLIEST_MIN_ATTEMPTS:
                 continue
@@ -228,12 +241,65 @@ class BalatroMetricsCallback(BaseCallback):
                 best = (name, rate)
         return best
 
+    def _deadliest_position(self):
+        """(ante, slot, round, death_rate) of the all-time deadliest (ante, slot) position, or None."""
+        best = None
+        for position in set(self.blind_position_clears) | set(self.blind_position_deaths):
+            attempts = self.blind_position_clears[position] + self.blind_position_deaths[position]
+            if attempts < DEADLIEST_MIN_ATTEMPTS:
+                continue
+            rate = self.blind_position_deaths[position] / attempts
+            if rate > 0 and (best is None or rate > best[3]):
+                best = (position[0], position[1], self.blind_position_round.get(position) or None, rate)
+        return best
+
+    def _policy_snapshot(self, final=False):
+        """Numbers for the CLI policy-update line. final=True (training stopped) falls back to all-time
+        values when the rollout counters hold no finished episode."""
+        window = self.rollout if (self.rollout["episodes"] > 0 or not final) else self.totals
+        n = window["episodes"]
+        has = n > 0
+        deadliest_name, deadliest_rate = self._deadliest_blind()
+        boss_name, boss_rate = self._deadliest_blind(boss_only=True)
+        return PolicySnapshot(
+            steps=self.num_timesteps,
+            episodes=self.totals["episodes"],
+            rollout_episodes=self.rollout["episodes"],
+            reward_mean=window["reward_sum"] / n if has else None,
+            clear_rate=window["blind_clears"] / max(1, window["blind_attempts"]) if has else None,
+            mean_ante=window["ante_sum"] / n if has else None,
+            mean_round=window["round_sum"] / n if has else None,
+            best_ante=self.best_ante,
+            best_round=self.best_round,
+            wins_total=self.totals["wins"],
+            wins_rollout=self.rollout["wins"],
+            deadliest_position=self._deadliest_position(),
+            deadliest_blind=(deadliest_name, deadliest_rate) if deadliest_name else None,
+            deadliest_boss=(boss_name, boss_rate) if boss_name else None,
+        )
+
+    def print_cutoff(self):
+        """Easter egg for when training stops: the in-progress episode as CUT OFF, then final stats. Prints once."""
+        if self._cutoff_done:
+            return
+        self._cutoff_done = True
+        self.tracker.number = self.tracker.number or self.totals["episodes"] + 1
+        self.reporter.cutoff(self.tracker.snapshot(self.episode_reward), self._policy_snapshot(final=True))
+
+    def _on_training_end(self) -> None:
+        # Step budget reached mid-episode (Ctrl+C goes through train_agent's KeyboardInterrupt path instead)
+        self.print_cutoff()
+
     def _on_step(self) -> bool:
         dones = self.locals.get("dones", [])
         infos = self.locals.get("infos", [])
 
-        for done, info in zip(dones, infos):
+        rewards = self.locals.get("rewards", [])
+        for idx, (done, info) in enumerate(zip(dones, infos)):
             self.episode["steps"] += 1
+            if idx < len(rewards):
+                self.episode_reward += float(rewards[idx])
+            episode_number = self.totals["episodes"] + 1
 
             # Chip-gain based hand tracking
             curr_chips = info.get("chips", 0)
@@ -296,9 +362,13 @@ class BalatroMetricsCallback(BaseCallback):
                         self._add("jokers_gained")
                         if action_taken == 7:  # BUY_JOKER
                             self._add("jokers_purchased")
+                        self.reporter.joker_event("bought" if action_taken == 7 else "gained",
+                                                  joker.get("name", "Unknown"), episode_number)
                 for jid, joker in self._prev_jokers_by_id.items():
                     if jid not in curr_jokers_by_id:
                         self._record_joker_hold(joker, sold=gold_increased)
+                        if gold_increased:
+                            self.reporter.joker_event("sold", joker.get("name", "Unknown"), episode_number)
                 self._prev_jokers_by_id = curr_jokers_by_id
 
             # Vouchers on offer: each distinct (ante, voucher) counts once per episode
@@ -351,7 +421,19 @@ class BalatroMetricsCallback(BaseCallback):
             if not blind_cleared:
                 self._blind_ante = info.get("ante", 0)
 
+            # CLI: _blind_ante is now the ante of the blind being played (latched on cleared steps)
+            self.reporter.live_events(self.tracker.on_step(info, self._blind_ante, episode_number), episode_number)
+
+            if info.get("won", False) and not done:
+                # Endless mode: the win step does not end the episode, so show the WON line now
+                self.reporter.episode_end(self.tracker.win_snapshot(self.episode_reward))
+
             if done:
+                # Reward from the Monitor wrapper (episode return); fall back to the per-step sum
+                reward = float((info.get("episode") or {}).get("r", self.episode_reward))
+                self.rollout_values["episode_reward"].append(reward)
+                self._add("reward_sum", reward)
+                self.reporter.episode_end(self.tracker.finish(info, reward))
                 self._end_episode(info)
 
         return True
@@ -384,6 +466,8 @@ class BalatroMetricsCallback(BaseCallback):
         for a in ANTES_TRACKED:
             if ante >= a:
                 self.ante_reached[a] += 1
+        self._add("ante_sum", ante)
+        self._add("round_sum", round_)
         self.rollout_values["ante"].append(ante)
         self.rollout_values["round"].append(round_)
         self.rollout_values["max_gold"].append(self.episode_max_gold)
@@ -877,6 +961,9 @@ class BalatroMetricsCallback(BaseCallback):
         for (ctype, cname), count in self.consumable_use_counts.items():
             self.logger.record(f"consumable_{ctype}/{cname}_used", count)
 
+        # CLI policy-update line (built before the rollout buffers reset)
+        policy_snapshot = self._policy_snapshot()
+
         # Reset rollout buffers
         self.rollout = Counter()
         self.rollout_values = defaultdict(list)
@@ -891,9 +978,11 @@ class BalatroMetricsCallback(BaseCallback):
 
         self.logger.dump(self.num_timesteps)
 
-        deadliest = f"{deadliest_name} ({deadliest_rate:.0%})" if deadliest_name else "n/a"
-        print(f"\n🔄 Policy update at {self.num_timesteps} steps | "
-              f"Episodes: {self.totals['episodes']} (+{n}) | "
-              f"Win rate: {self._win_pct():.1f}% | "
-              f"Best ante: {self.best_ante} round: {self.best_round} | "
-              f"Deadliest blind: {deadliest}")
+        # --- Previous policy-update print (unused: replaced by CLIReporter.policy_update; it showed the win rate) ---
+        # deadliest = f"{deadliest_name} ({deadliest_rate:.0%})" if deadliest_name else "n/a"
+        # print(f"\n🔄 Policy update at {self.num_timesteps} steps | "
+        #       f"Episodes: {self.totals['episodes']} (+{n}) | "
+        #       f"Win rate: {self._win_pct():.1f}% | "
+        #       f"Best ante: {self.best_ante} round: {self.best_round} | "
+        #       f"Deadliest blind: {deadliest}")
+        self.reporter.policy_update(policy_snapshot)
