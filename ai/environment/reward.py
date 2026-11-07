@@ -1,5 +1,6 @@
 from typing import Dict, Any
 import numpy as np
+from ..utils.debug import dprint
 from ..utils.constants import (PACK_STATE_IDS, SHOP_STATE_ID, SELECTING_HAND_STATE_ID,
                                PASSIVE_JOKERS, PASSIVE_CONTRIBUTION_FLOOR)
 
@@ -30,29 +31,30 @@ class BalatroRewardCalculator:
         # Episode tracking
         self._started = False
         self.episode_count = 0
-        self.wins = 0
+#         self.wins = 0
         self.episode_total_reward = 0
-        self.last_seen_hand_type = 'Unknown'
-        self.winning_chips = 0
+#         self.last_seen_hand_type = 'Unknown'
+#         self.winning_chips = 0
+        self._boss_bonus_paid = set()      # (ante, boss name) already paid the boss bonus this episode
 
         # Per-blind tracking
         self.current_blind_name = ''
         self.current_blind_chips = 0       # requirement for current blind
         self.current_blind_ante = 1
-        self.current_round_count = 0       # round_count when this blind started
-        self.current_round_hands = []      # hands played in current blind
-        self.rounds_played = []            # completed rounds: [{blind_name, blind_chips, ante, round_num, hands, cleared}]
+#         self.current_round_count = 0       # round_count when this blind started
+#         self.current_round_hands = []      # hands played in current blind
+#         self.rounds_played = []            # completed rounds: [{blind_name, blind_chips, ante, round_num, hands, cleared}]
         self.highest_chips_this_blind = 0  # peak chips seen this blind (for game_over reporting)
         self.pending_cards_removed = 0     # playing cards removed since last blind clear (paid on clear)
 
-        # Game-over reporting
-        self.game_over_chips = 0
-        self.game_over_blind_chips = 0
-        self.game_over_blind_name = ''
-        self.game_over_ante = 1
+#         # Game-over reporting
+#         self.game_over_chips = 0
+#         self.game_over_blind_chips = 0
+#         self.game_over_blind_name = ''
+#         self.game_over_ante = 1
 
-        # Joker tracking
-        self.episode_jokers: list = []
+#         # Joker tracking
+#         self.episode_jokers: list = []
 
         # Shop vars
         self.previous_money = 0
@@ -241,7 +243,7 @@ class BalatroRewardCalculator:
         # Update tracking
         self.previous_money = current_money
         self.total_jokers = len(current_jokers)
-        self.episode_jokers = [j.get('name', 'Unknown') for j in current_jokers]
+#         self.episode_jokers = [j.get('name', 'Unknown') for j in current_jokers]
 
         prev_shop_items = prev_game_state.get('shop', {}).get('items', [])
         curr_shop_items = current_game_state.get('shop', {}).get('items', [])
@@ -345,23 +347,23 @@ class BalatroRewardCalculator:
         # --- Blind transition detection ---
         # When blind_name changes, a new blind has started
         if blind_name and blind_name not in ('None', '') and blind_name != self.current_blind_name:
-            if self.current_blind_name:  # save the round we just finished
-                self.rounds_played.append({
-                    'blind_name': self.current_blind_name,
-                    'blind_chips': self.current_blind_chips,
-                    'ante': self.current_blind_ante,
-                    'round_num': self.current_round_count,
-                    'hands': list(self.current_round_hands),
-                    'cleared': self.blind_already_defeated,
-                })
-            self.current_round_hands = []
+#             if self.current_blind_name:  # save the round we just finished
+#                 self.rounds_played.append({
+#                     'blind_name': self.current_blind_name,
+#                     'blind_chips': self.current_blind_chips,
+#                     'ante': self.current_blind_ante,
+#                     'round_num': self.current_round_count,
+#                     'hands': list(self.current_round_hands),
+#                     'cleared': self.blind_already_defeated,
+#                 })
+#             self.current_round_hands = []
             self.highest_chips_this_blind = 0
             self.previous_chips = 0
             self.blind_already_defeated = False
             self.current_blind_name = blind_name
             self.current_blind_chips = blind_chips
             self.current_blind_ante = ante
-            self.current_round_count = inner_game_state.get('round_count', 0)
+#             self.current_round_count = inner_game_state.get('round_count', 0)
 
         # Track peak chips for accurate game-over reporting
         self.highest_chips_this_blind = max(self.highest_chips_this_blind, current_chips)
@@ -421,14 +423,14 @@ class BalatroRewardCalculator:
         # === HAND TYPE tracking ===
         current_hand_info = inner_game_state.get('current_hand', {})
         current_hand_played = current_hand_info.get('last_handname', 'None')
-        if current_hand_played and current_hand_played != 'None' and current_hand_played != '':
-            self.last_seen_hand_type = current_hand_played
+#         if current_hand_played and current_hand_played != 'None' and current_hand_played != '':
+#             self.last_seen_hand_type = current_hand_played
 
         # === CORE SCORING REWARDS ===
         chip_gain = current_chips - self.previous_chips
         if chip_gain > 0 and game_over == 0 and not self.blind_already_defeated and blind_chips > 0:
-            hand_type_to_use = getattr(self, 'last_seen_hand_type', 'Unknown')
-            self._track_hand_played(chip_gain, hand_type_to_use, current_chips, blind_chips)
+#             hand_type_to_use = getattr(self, 'last_seen_hand_type', 'Unknown')
+#             self._track_hand_played(chip_gain, hand_type_to_use, current_chips, blind_chips)
 
             chip_percentage = (chip_gain / blind_chips) * 100
             chip_reward = float(np.clip(chip_percentage * 0.1, 0, 10))
@@ -464,10 +466,10 @@ class BalatroRewardCalculator:
                 self.pending_cards_removed = 0
 
             self.blind_already_defeated = True
-            self.winning_chips = current_chips
-            print(f"✅ Blind cleared! Ante {self.current_blind_ante} - {self.current_blind_name} "
-                  f"| {self.highest_chips_this_blind}/{self.current_blind_chips} chips "
-                  f"[round {self.current_round_count}]")
+#             self.winning_chips = current_chips
+#             print(f"✅ Blind cleared! Ante {self.current_blind_ante} - {self.current_blind_name} "
+#                   f"| {self.highest_chips_this_blind}/{self.current_blind_chips} chips "
+#                   f"[round {self.current_round_count}]")
 
         # === PROGRESSION BONUS ===
         if ante > self.current_ante:
@@ -477,11 +479,24 @@ class BalatroRewardCalculator:
             self.current_ante = ante
 
         # === BOSS BLIND BONUS ===
-        blind_name_val = inner_game_state.get('blind_name', '')
+        # --- Previous boss bonus (unused: fired on every ROUND_EVAL poll after a boss clear, not once) ---
+#         blind_name_val = inner_game_state.get('blind_name', '')
+#         is_boss = blind_name_val not in ['Small Blind', 'Big Blind', 'None', '']
+#         if (blind_cleared_flag or game_won) and is_boss and self.blind_already_defeated:
+#             reward += 5.0 * ante
+#             reward_breakdown.append(f"boss_blind_bonus ante {ante}: +{5.0 * ante:.1f}")
+
+        # Fires exactly once per boss clear, keyed on blind identity (latched ante, blind name), never the round counter.
+        # current_blind_ante / current_blind_name are latched when the blind starts, so they are unaffected by the
+        # ease_ante(1) that Balatro queues before ROUND_EVAL on a boss clear.
+        blind_name_val = self.current_blind_name or inner_game_state.get('blind_name', '')
         is_boss = blind_name_val not in ['Small Blind', 'Big Blind', 'None', '']
-        if (blind_cleared_flag or game_won) and is_boss and self.blind_already_defeated:
-            reward += 5.0 * ante
+        boss_key = (self.current_blind_ante, blind_name_val)
+        if (blind_cleared_flag or game_won) and is_boss and self.blind_already_defeated and boss_key not in self._boss_bonus_paid:
+            self._boss_bonus_paid.add(boss_key)
+            reward += 5.0 * ante  # amount unchanged: `ante` is the post-clear ante, as before
             reward_breakdown.append(f"boss_blind_bonus ante {ante}: +{5.0 * ante:.1f}")
+            dprint("BOSS BONUS", f"fired for {boss_key} (reported ante {ante}, +{5.0 * ante:.1f}); paid so far this episode: {len(self._boss_bonus_paid)}")
 
         # === GAME OVER PENALTY ===
         if game_over == 1 and not hasattr(self, 'game_over_penalty_applied') and not self.blind_already_defeated:
@@ -492,11 +507,11 @@ class BalatroRewardCalculator:
             reward += progress_credit
             reward_breakdown.append(f"Game over: -15.0 + progress_credit {progress:.1%}: +{progress_credit:.2f}")
             self.game_over_penalty_applied = True
-            # Capture context for CLI output
-            self.game_over_chips = self.highest_chips_this_blind
-            self.game_over_blind_chips = blind_req
-            self.game_over_blind_name = self.current_blind_name if self.current_blind_name else blind_name
-            self.game_over_ante = self.current_blind_ante if self.current_blind_ante else ante
+#             # Capture context for CLI output
+#             self.game_over_chips = self.highest_chips_this_blind
+#             self.game_over_blind_chips = blind_req
+#             self.game_over_blind_name = self.current_blind_name if self.current_blind_name else blind_name
+#             self.game_over_ante = self.current_blind_ante if self.current_blind_ante else ante
 
         if reward_breakdown:
             self.episode_reward_breakdown.extend([f"[PLAY] {e}" for e in reward_breakdown])
@@ -517,12 +532,13 @@ class BalatroRewardCalculator:
         if self.current_ante > self.best_ante_reached:
             self.best_ante_reached = self.current_ante
 
-        if self.blind_already_defeated:
-            self.wins += 1
-            self._log_episode_win()
-            self._log_win_rate()
-        else:
-            self._log_episode()
+# --- Previous CLI-only state (unused: output now lives in ai/utils/cli_reporter.py, fed by BalatroMetricsCallback) ---
+#         if self.blind_already_defeated:
+#             self.wins += 1
+#             self._log_episode_win()
+#             self._log_win_rate()
+#         else:
+#             self._log_episode()
 
         # Reset episode state
         self._started = False
@@ -531,25 +547,26 @@ class BalatroRewardCalculator:
         self.previous_hand_played = "None"
         self.blind_already_defeated = False
         self.episode_total_reward = 0
-        self.last_seen_hand_type = 'Unknown'
-        self.winning_chips = 0
+#         self.last_seen_hand_type = 'Unknown'
+#         self.winning_chips = 0
+        self._boss_bonus_paid = set()
 
         # Reset per-blind state
         self.current_blind_name = ''
         self.current_blind_chips = 0
         self.current_blind_ante = 1
-        self.current_round_count = 0
-        self.current_round_hands = []
-        self.rounds_played = []
+#         self.current_round_count = 0
+#         self.current_round_hands = []
+#         self.rounds_played = []
         self.highest_chips_this_blind = 0
         self.pending_cards_removed = 0
-        self.game_over_chips = 0
-        self.game_over_blind_chips = 0
-        self.game_over_blind_name = ''
-        self.game_over_ante = 1
+#         self.game_over_chips = 0
+#         self.game_over_blind_chips = 0
+#         self.game_over_blind_name = ''
+#         self.game_over_ante = 1
 
-        # Reset jokers
-        self.episode_jokers = []
+#         # Reset jokers
+#         self.episode_jokers = []
 
         self.previous_money = 0
         self.total_jokers = 0
@@ -568,59 +585,60 @@ class BalatroRewardCalculator:
         if hasattr(self, 'game_over_penalty_applied'):
             delattr(self, 'game_over_penalty_applied')
 
-    def _all_rounds_for_log(self):
-        """Build full round list including in-progress round."""
-        rounds = list(self.rounds_played)
-        if self.current_round_hands:
-            rounds.append({
-                'blind_name': self.current_blind_name,
-                'blind_chips': self.current_blind_chips,
-                'ante': self.current_blind_ante,
-                'round_num': self.current_round_count,
-                'hands': list(self.current_round_hands),
-                'cleared': self.blind_already_defeated,
-            })
-        return rounds
+# --- Previous CLI-only state (unused: output now lives in ai/utils/cli_reporter.py, fed by BalatroMetricsCallback) ---
+#     def _all_rounds_for_log(self):
+#         """Build full round list including in-progress round."""
+#         rounds = list(self.rounds_played)
+#         if self.current_round_hands:
+#             rounds.append({
+#                 'blind_name': self.current_blind_name,
+#                 'blind_chips': self.current_blind_chips,
+#                 'ante': self.current_blind_ante,
+#                 'round_num': self.current_round_count,
+#                 'hands': list(self.current_round_hands),
+#                 'cleared': self.blind_already_defeated,
+#             })
+#         return rounds
 
-    def _log_rounds(self, rounds):
-        for round_data in rounds:
-            cleared_marker = ' [cleared!]' if round_data.get('cleared') else ''
-            round_num = round_data.get('round_num', 0)
-            print(f"   Ante {round_data['ante']} - {round_data['blind_name']} ({round_data['blind_chips']} needed) [round {round_num}]{cleared_marker}:")
-            for i, hand in enumerate(round_data['hands'], 1):
-                print(f"      Hand {i}: {hand['hand_type']} "
-                      f"(+{hand['chips']} chips, total: {hand['total_chips']}/{hand['blind_chips']})")
+#     def _log_rounds(self, rounds):
+#         for round_data in rounds:
+#             cleared_marker = ' [cleared!]' if round_data.get('cleared') else ''
+#             round_num = round_data.get('round_num', 0)
+#             print(f"   Ante {round_data['ante']} - {round_data['blind_name']} ({round_data['blind_chips']} needed) [round {round_num}]{cleared_marker}:")
+#             for i, hand in enumerate(round_data['hands'], 1):
+#                 print(f"      Hand {i}: {hand['hand_type']} "
+#                       f"(+{hand['chips']} chips, total: {hand['total_chips']}/{hand['blind_chips']})")
 
-    def _log_episode_win(self):
-        final_chips = self.winning_chips
-        print(f"🎯 EPISODE {self.episode_count} WON with {final_chips} chips | "
-              f"reward: {self.episode_total_reward:.1f}")
-        rounds = self._all_rounds_for_log()
-        self._log_rounds(rounds)
-        jokers_str = ', '.join(self.episode_jokers) if self.episode_jokers else 'None'
-        print(f"   Jokers: [{jokers_str}]")
+#     def _log_episode_win(self):
+#         final_chips = self.winning_chips
+#         print(f"🎯 EPISODE {self.episode_count} WON with {final_chips} chips | "
+#               f"reward: {self.episode_total_reward:.1f}")
+#         rounds = self._all_rounds_for_log()
+#         self._log_rounds(rounds)
+#         jokers_str = ', '.join(self.episode_jokers) if self.episode_jokers else 'None'
+#         print(f"   Jokers: [{jokers_str}]")
 
-    def _log_win_rate(self):
-        win_rate = (self.wins / self.episode_count) * 100
-        print(f"📊 Episode {self.episode_count}: {self.wins} wins ({win_rate:.1f}%)")
+#     def _log_win_rate(self):
+#         win_rate = (self.wins / self.episode_count) * 100
+#         print(f"📊 Episode {self.episode_count}: {self.wins} wins ({win_rate:.1f}%)")
 
-    def _track_hand_played(self, chip_gain, hand_type, current_chips, blind_chips):
-        self.current_round_hands.append({
-            'chips': chip_gain,
-            'hand_type': hand_type if hand_type != "None" else "Unknown",
-            'total_chips': current_chips,
-            'blind_chips': blind_chips,
-        })
+#     def _track_hand_played(self, chip_gain, hand_type, current_chips, blind_chips):
+#         self.current_round_hands.append({
+#             'chips': chip_gain,
+#             'hand_type': hand_type if hand_type != "None" else "Unknown",
+#             'total_chips': current_chips,
+#             'blind_chips': blind_chips,
+#         })
 
-    def _log_episode(self):
-        if self.game_over_blind_name:
-            header = (f"Defeated by Ante {self.game_over_ante} {self.game_over_blind_name} "
-                      f"({self.game_over_chips}/{self.game_over_blind_chips} chips)")
-        else:
-            header = f"{self.highest_chips_this_blind} chips"
+#     def _log_episode(self):
+#         if self.game_over_blind_name:
+#             header = (f"Defeated by Ante {self.game_over_ante} {self.game_over_blind_name} "
+#                       f"({self.game_over_chips}/{self.game_over_blind_chips} chips)")
+#         else:
+#             header = f"{self.highest_chips_this_blind} chips"
 
-        print(f"🎯 EPISODE {self.episode_count}: {header} | reward: {self.episode_total_reward:.1f}")
-        rounds = self._all_rounds_for_log()
-        self._log_rounds(rounds)
-        jokers_str = ', '.join(self.episode_jokers) if self.episode_jokers else 'None'
-        print(f"   Jokers: [{jokers_str}]\n\n")
+#         print(f"🎯 EPISODE {self.episode_count}: {header} | reward: {self.episode_total_reward:.1f}")
+#         rounds = self._all_rounds_for_log()
+#         self._log_rounds(rounds)
+#         jokers_str = ', '.join(self.episode_jokers) if self.episode_jokers else 'None'
+#         print(f"   Jokers: [{jokers_str}]\n\n")
