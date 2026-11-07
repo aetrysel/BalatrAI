@@ -27,6 +27,16 @@ TAG_SOURCES = ["skip", "double", "anaglyph", "diet_cola", "other"]
 ANTES_TRACKED = range(2, 9)
 # Minimum attempts before a blind counts toward blinds/deadliest_death_rate
 DEADLIEST_MIN_ATTEMPTS = 5
+
+# How a joker that wasn't bought (action 7) arrived, keyed by the action taken on that step (CLAUDE.md action table)
+JOKER_GAIN_SOURCES = {
+    15: "pack",                   # SELECT_PACK_CARD (Buffoon pack, or tag-granted packs)
+    14: "consumable",             # USE_CONSUMABLE (Judgement, Wraith, The Soul)
+    18: "consumable",             # BUY_AND_USE_CONSUMABLE
+    5: "blind-select effect",     # SELECT_BLIND (e.g. Riff-Raff creating jokers)
+    17: "skip tag",               # SKIP_BLIND (tag rewards that grant a joker)
+    11: "round-end effect",       # CASH_OUT
+}
 SHOP_STATE_ID = 5
 # Per-pack counters from RLBridge/stats.lua (offered = rolled into a shop booster slot)
 PACK_FIELDS = ("offered", "opened", "bought", "picks", "skips")
@@ -362,8 +372,11 @@ class BalatroMetricsCallback(BaseCallback):
                         self._add("jokers_gained")
                         if action_taken == 7:  # BUY_JOKER
                             self._add("jokers_purchased")
+                        # self.reporter.joker_event("bought" if action_taken == 7 else "gained",
+                        #                           joker.get("name", "Unknown"), episode_number)
                         self.reporter.joker_event("bought" if action_taken == 7 else "gained",
-                                                  joker.get("name", "Unknown"), episode_number)
+                                                  joker.get("name", "Unknown"), episode_number,
+                                                  source=JOKER_GAIN_SOURCES.get(action_taken, "other effect"))
                 for jid, joker in self._prev_jokers_by_id.items():
                     if jid not in curr_jokers_by_id:
                         self._record_joker_hold(joker, sold=gold_increased)

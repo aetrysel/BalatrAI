@@ -278,6 +278,7 @@ class CLIReporter:
         self.clock = clock
         self.wrap_width = wrap_width
         self._header_printed_for = None
+        self._blind_header_for = None  # (episode, ante, blind name) whose live blind header was printed
         # Previous policy update (for deltas and elapsed time)
         self._prev_time: Optional[float] = None
         self._prev_values: dict = {}
@@ -362,6 +363,7 @@ class CLIReporter:
             if isinstance(ev, HandEvent):
                 if self.level >= OutputLevel.VERBOSE:
                     self._live_header(episode_number)
+                    self._live_blind_header(ev.blind, episode_number)
                     self.out(self.format_hand(ev.number, ev.hand, ev.blind.target))
             elif isinstance(ev, ClearEvent):
                 if self.level >= OutputLevel.ROUND:
@@ -371,12 +373,25 @@ class CLIReporter:
                     self._live_header(episode_number)
                     self.out(self.format_jokers(ev.jokers))
 
-    def joker_event(self, kind: str, name: str, episode_number: int) -> None:
+    @staticmethod
+    def format_blind_header(blind) -> str:
+        return f"   ── Ante {blind.ante} - {blind.name} [round {blind.round}] ──"
+
+    def _live_blind_header(self, blind, episode_number: int) -> None:
+        """Print an ante/blind header once, before the first live hand of each blind."""
+        key = (episode_number, blind.ante, blind.name)
+        if self._blind_header_for != key:
+            self._blind_header_for = key
+            self.out(self.format_blind_header(blind))
+
+    def joker_event(self, kind: str, name: str, episode_number: int, source: str = "") -> None:
+        """kind: bought / sold / gained. source: how a gained joker arrived (e.g. 'pack', 'consumable')."""
         if self.level < OutputLevel.VERBOSE:
             return
         self._live_header(episode_number)
         icon, verb = {"bought": ("🃏", "Bought"), "sold": ("💸", "Sold"), "gained": ("🃏", "Gained")}[kind]
-        self.out(f"   {icon} {verb} {name}")
+        suffix = f" (from {source})" if source and kind == "gained" else ""
+        self.out(f"   {icon} {verb} {name}{suffix}")
 
     def episode_end(self, result: EpisodeResult) -> None:
         for line in self.format_episode_end(result):
