@@ -108,6 +108,7 @@ class BalatroMetricsCallback(BaseCallback):
         self.blind_position_clears = defaultdict(int)
         self.blind_position_deaths = defaultdict(int)
         self.blind_position_round = {}  # last round number seen at each (ante, slot), CLI display only
+        self.blind_position_name = {}   # last blind name seen at each (ante, slot), CLI display only (fixed per position in seeded runs)
         self.rollout_blind_position_clears = defaultdict(int)
         self.rollout_blind_position_deaths = defaultdict(int)
 
@@ -222,6 +223,7 @@ class BalatroMetricsCallback(BaseCallback):
         name = info.get("blind_name", "None")
         position = (ante or info.get("ante", 0), self._blind_slot(name))
         self.blind_position_round[position] = info.get("round", 0)
+        self.blind_position_name[position] = name
         if cleared:
             self.blind_clears_by_name[name] += 1
             self.rollout_blind_clears_by_name[name] += 1
@@ -251,10 +253,13 @@ class BalatroMetricsCallback(BaseCallback):
                 best = (name, rate)
         return best
 
-    def _deadliest_position(self):
-        """(ante, slot, round, death_rate) of the all-time deadliest (ante, slot) position, or None."""
+    def _deadliest_position(self, boss_only=False):
+        """(ante, slot, round, death_rate) of the all-time deadliest (ante, slot) position, or None.
+        boss_only restricts the search to Boss positions."""
         best = None
         for position in set(self.blind_position_clears) | set(self.blind_position_deaths):
+            if boss_only and position[1] != "Boss":
+                continue
             attempts = self.blind_position_clears[position] + self.blind_position_deaths[position]
             if attempts < DEADLIEST_MIN_ATTEMPTS:
                 continue
@@ -284,6 +289,8 @@ class BalatroMetricsCallback(BaseCallback):
             wins_total=self.totals["wins"],
             wins_rollout=self.rollout["wins"],
             deadliest_position=self._deadliest_position(),
+            deadliest_boss_position=self._deadliest_position(boss_only=True),
+            position_names=dict(self.blind_position_name),
             deadliest_blind=(deadliest_name, deadliest_rate) if deadliest_name else None,
             deadliest_boss=(boss_name, boss_rate) if boss_name else None,
         )
