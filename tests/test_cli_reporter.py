@@ -372,3 +372,26 @@ def test_invalid_output_level_falls_back_to_round():
     for bad in (0, 9, -1, "x", None):
         assert coerce_level(bad) == OutputLevel.ROUND
     assert coerce_level(5) == OutputLevel.VERBOSE
+
+
+def test_gained_jokers_name_their_source():
+    h = Harness(OutputLevel.VERBOSE)
+    h.step(info(jokers=(), gold=10))
+    h.step(info(jokers=("Jolly Joker",), gold=10, action_taken=15))           # pack pick
+    h.step(info(jokers=("Jolly Joker", "Mad Joker"), gold=10, action_taken=14))  # Judgement
+    h.step(info(jokers=("Jolly Joker", "Mad Joker", "Joker"), gold=10, action_taken=9))  # unmapped action
+    assert "   🃏 Gained Jolly Joker (from pack)" in h.lines
+    assert "   🃏 Gained Mad Joker (from consumable)" in h.lines
+    assert "   🃏 Gained Joker (from other effect)" in h.lines
+
+
+def test_live_hands_get_one_blind_header_per_blind():
+    h = Harness(OutputLevel.VERBOSE)
+    play_small_blind_two_hands(h)
+    header = "   ── Ante 1 - Small Blind [round 1] ──"
+    assert h.lines.count(header) == 1
+    assert h.lines.index(header) < h.lines.index("   Hand 1: Pair +100 (100/300)")
+    # No blind header below VERBOSE (no live hand lines there)
+    h2 = Harness(OutputLevel.ROUND)
+    play_small_blind_two_hands(h2)
+    assert header not in h2.lines
