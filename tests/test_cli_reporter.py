@@ -395,3 +395,18 @@ def test_live_hands_get_one_blind_header_per_blind():
     h2 = Harness(OutputLevel.ROUND)
     play_small_blind_two_hands(h2)
     assert header not in h2.lines
+
+
+def test_dprint_hidden_unless_debug_output_on(capsys):
+    from ai.utils import debug
+    debug.set_debug_output(False)
+    debug.dprint("BOSS BONUS", "fired")
+    assert "BOSS BONUS" not in capsys.readouterr().out
+    lines = []
+    listener = KeyListener(CLIReporter(out=lines.append), stream=io.StringIO())
+    listener.handle_key("d")
+    assert debug.debug_output_enabled() and "Debug output: ON (press 'd' to toggle)" in lines
+    debug.dprint("BOSS BONUS", "fired")
+    assert "[BOSS BONUS] fired" in capsys.readouterr().out
+    listener.handle_key("d")
+    assert not debug.debug_output_enabled()
