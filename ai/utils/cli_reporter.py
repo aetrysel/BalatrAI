@@ -294,7 +294,14 @@ class CLIReporter:
         for lvl in OutputLevel:
             marker = "*" if lvl == self.level else " "
             lines.append(f" {marker} [{int(lvl)}] {lvl.name:<8} {LEVEL_HELP[lvl]}")
+        from .debug import debug_output_enabled
+        lines.append(f"   [d] debug output (currently {'ON' if debug_output_enabled() else 'OFF'})")
         return "\n".join(lines)
+
+    def toggle_debug_output(self) -> None:
+        from .debug import debug_output_enabled, set_debug_output
+        set_debug_output(not debug_output_enabled())
+        self.out(f"Debug output: {'ON' if debug_output_enabled() else 'OFF'} (press 'd' to toggle)")
 
     def show_help(self) -> None:
         self.out(self.help_text())
@@ -548,6 +555,8 @@ class KeyListener:
             self.reporter.set_level(OutputLevel(int(key)))
         elif key == "?":
             self.reporter.show_help()
+        elif key in ("d", "D"):
+            self.reporter.toggle_debug_output()
 
     def _run(self):
         import select

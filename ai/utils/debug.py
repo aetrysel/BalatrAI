@@ -4,6 +4,19 @@ Debug utilities for timestamped print statements and debugging helpers
 
 import datetime
 
+# dprint lines are hidden unless debug output is on (settings menu "Debug output", or key 'd' during training)
+_debug_output = False
+
+
+def set_debug_output(enabled: bool) -> None:
+    """Show (True) or hide (False) dprint lines."""
+    global _debug_output
+    _debug_output = bool(enabled)
+
+
+def debug_output_enabled() -> bool:
+    return _debug_output
+
 
 def timestamp() -> str:
     """
@@ -36,4 +49,6 @@ def dprint(prefix: str, *args, **kwargs):
         *args: Arguments to print  
         **kwargs: Keyword arguments for print()
     """
-    print(f"[{timestamp()}] [{prefix}]", *args, **kwargs)
+    # print(f"[{timestamp()}] [{prefix}]", *args, **kwargs)  # previous: always printed
+    if _debug_output:
+        print(f"[{timestamp()}] [{prefix}]", *args, **kwargs)
