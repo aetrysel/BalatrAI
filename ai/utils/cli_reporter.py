@@ -266,6 +266,8 @@ class PolicySnapshot:
     deadliest_position: Optional[Tuple[int, str, Optional[int], float]] = None
     deadliest_blind: Optional[Tuple[str, float]] = None   # (name, rate) over all blinds
     deadliest_boss: Optional[Tuple[str, float]] = None    # (name, rate) over boss blinds only
+    deadliest_boss_position: Optional[Tuple[int, str, Optional[int], float]] = None  # deadliest Boss (ante, slot) position
+    position_names: dict = field(default_factory=dict)    # (ante, slot) -> blind name last seen there
 
 
 class CLIReporter:
@@ -416,15 +418,30 @@ class CLIReporter:
         sign = "+" if d >= 0 else "-"
         return f" ({sign}{format(abs(d), fmt)}{suffix})"
 
+    @staticmethod
+    def _position_label(snap: PolicySnapshot, ante: int, slot: str, rnd: Optional[int]) -> str:
+        name = snap.position_names.get((ante, slot)) or slot
+        return f"A{ante} {name}" + (f" [round {rnd}]" if rnd else "")
+
     def _deadliest_text(self, snap: PolicySnapshot) -> str:
         boss = f"boss: {snap.deadliest_boss[0]} {snap.deadliest_boss[1]:.0%}" if snap.deadliest_boss else None
         if self.seeded:
-            if not snap.deadliest_blind:
+            # Previous seeded format: deadliest blind by name only (no ante/round)
+            # if not snap.deadliest_blind:
+            #     return "n/a"
+            # name, rate = snap.deadliest_blind
+            # text = f"{name} {rate:.0%}"
+            # if boss and blind_slot(name) != "Boss":
+            #     text += f" · {boss}"
+            # return text
+            # Seeded: each (ante, slot) always holds the same blind, so name it alongside its ante & round
+            if not snap.deadliest_position:
                 return "n/a"
-            name, rate = snap.deadliest_blind
-            text = f"{name} {rate:.0%}"
-            if boss and blind_slot(name) != "Boss":
-                text += f" · {boss}"
+            ante, slot, rnd, rate = snap.deadliest_position
+            text = self._position_label(snap, ante, slot, rnd) + f" {rate:.0%}"
+            if slot != "Boss" and snap.deadliest_boss_position:
+                b_ante, b_slot, b_rnd, b_rate = snap.deadliest_boss_position
+                text += f" · boss: {self._position_label(snap, b_ante, b_slot, b_rnd)} {b_rate:.0%}"
             return text
         if not snap.deadliest_position:
             return "n/a"

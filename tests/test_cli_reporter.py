@@ -221,11 +221,16 @@ def test_policy_line_first_then_deltas_and_no_wins_segment():
 
 def test_policy_line_unseeded_and_seeded_deadliest():
     assert "Deadliest: A2 Boss [round 6] 56% · boss: The Mouth 61%" in CLIReporter(seeded=False).format_policy(snap())
+    # Seeded: the deadliest position is named, with its ante & round
+    names = {(2, "Boss"): "The Mouth", (3, "Big"): "Big Blind"}
     seeded = CLIReporter(seeded=True)
-    assert "Deadliest: The Mouth 61%" in seeded.format_policy(snap())
-    # A deadliest blind that is not a boss gets the deadliest boss appended
-    text = CLIReporter(seeded=True).format_policy(snap(deadliest_blind=("Big Blind", 0.4)))
-    assert "Deadliest: Big Blind 40% · boss: The Mouth 61%" in text
+    assert "Deadliest: A2 The Mouth [round 6] 56%" in seeded.format_policy(snap(position_names=names))
+    assert "· boss:" not in seeded.format_policy(snap(position_names=names))
+    # A deadliest blind that is not a boss gets the deadliest boss position appended
+    text = CLIReporter(seeded=True).format_policy(snap(position_names=names,
+                                                       deadliest_position=(3, "Big", 8, 0.4),
+                                                       deadliest_boss_position=(2, "Boss", 6, 0.61)))
+    assert "Deadliest: A3 Big Blind [round 8] 40% · boss: A2 The Mouth [round 6] 61%" in text
 
 
 def test_policy_wins_segment():
@@ -410,3 +415,12 @@ def test_dprint_hidden_unless_debug_output_on(capsys):
     assert "[BOSS BONUS] fired" in capsys.readouterr().out
     listener.handle_key("d")
     assert not debug.debug_output_enabled()
+
+
+def test_seeded_policy_line_from_callback_names_position_with_ante_and_round():
+    h = Harness(OutputLevel.MINIMAL, seeded=True)
+    for _ in range(5):  # die to the ante-1 boss five times
+        h.step(info(ante=1, action_taken=5, name="The Goad", rnd=3))
+        h.step(info(ante=1, name="The Goad", rnd=3), done=True)
+    h.cb._on_rollout_end()
+    assert "Deadliest: A1 The Goad [round 3] 100%" in h.text()
