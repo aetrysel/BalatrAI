@@ -267,6 +267,10 @@ class PolicySnapshot:
     deadliest_blind: Optional[Tuple[str, float]] = None   # (name, rate) over all blinds
     deadliest_boss: Optional[Tuple[str, float]] = None    # (name, rate) over boss blinds only
     deadliest_boss_position: Optional[Tuple[int, str, Optional[int], float]] = None  # deadliest Boss (ante, slot) position
+    # The same blind's death rate in the previous rollout (None if it wasn't attempted enough there)
+    deadliest_position_prev: Optional[float] = None
+    deadliest_boss_position_prev: Optional[float] = None
+    deadliest_boss_prev: Optional[float] = None
     position_names: dict = field(default_factory=dict)    # (ante, slot) -> blind name last seen there
 
 
@@ -423,8 +427,13 @@ class CLIReporter:
         name = snap.position_names.get((ante, slot)) or slot
         return f"A{ante} {name}" + (f" [round {rnd}]" if rnd else "")
 
+    def _rate_delta(self, rate: float, prev: Optional[float]) -> str:
+        """Change vs the same blind's death rate last rollout, in percentage points."""
+        return self._delta(rate * 100, None if prev is None else prev * 100, ".0f", "pp")
+
     def _deadliest_text(self, snap: PolicySnapshot) -> str:
-        boss = f"boss: {snap.deadliest_boss[0]} {snap.deadliest_boss[1]:.0%}" if snap.deadliest_boss else None
+        boss = (f"boss: {snap.deadliest_boss[0]} {snap.deadliest_boss[1]:.0%}"
+                + self._rate_delta(snap.deadliest_boss[1], snap.deadliest_boss_prev)) if snap.deadliest_boss else None
         if self.seeded:
             # Previous seeded format: deadliest blind by name only (no ante/round)
             # if not snap.deadliest_blind:
@@ -438,15 +447,18 @@ class CLIReporter:
             if not snap.deadliest_position:
                 return "n/a"
             ante, slot, rnd, rate = snap.deadliest_position
-            text = self._position_label(snap, ante, slot, rnd) + f" {rate:.0%}"
+            text = (self._position_label(snap, ante, slot, rnd) + f" {rate:.0%}"
+                    + self._rate_delta(rate, snap.deadliest_position_prev))
             if slot != "Boss" and snap.deadliest_boss_position:
                 b_ante, b_slot, b_rnd, b_rate = snap.deadliest_boss_position
-                text += f" · boss: {self._position_label(snap, b_ante, b_slot, b_rnd)} {b_rate:.0%}"
+                text += (f" · boss: {self._position_label(snap, b_ante, b_slot, b_rnd)} {b_rate:.0%}"
+                         + self._rate_delta(b_rate, snap.deadliest_boss_position_prev))
             return text
         if not snap.deadliest_position:
             return "n/a"
         ante, slot, rnd, rate = snap.deadliest_position
-        text = f"A{ante} {slot}" + (f" [round {rnd}]" if rnd else "") + f" {rate:.0%}"
+        text = (f"A{ante} {slot}" + (f" [round {rnd}]" if rnd else "") + f" {rate:.0%}"
+                + self._rate_delta(rate, snap.deadliest_position_prev))
         if boss:
             text += f" · {boss}"
         return text

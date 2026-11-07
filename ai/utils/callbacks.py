@@ -111,6 +111,9 @@ class BalatroMetricsCallback(BaseCallback):
         self.blind_position_name = {}   # last blind name seen at each (ante, slot), CLI display only (fixed per position in seeded runs)
         self.rollout_blind_position_clears = defaultdict(int)
         self.rollout_blind_position_deaths = defaultdict(int)
+        # Previous rollout's death rates (blinds with >= DEADLIEST_MIN_ATTEMPTS), for the CLI deadliest deltas
+        self._prev_rollout_position_rates = {}
+        self._prev_rollout_name_rates = {}
 
         # All-time per-object counters (logged as *_by_name/*, *_by_type/*)
         self.ante_reached = Counter()
@@ -253,20 +256,33 @@ class BalatroMetricsCallback(BaseCallback):
                 best = (name, rate)
         return best
 
-    def _deadliest_position(self, boss_only=False):
-        """(ante, slot, round, death_rate) of the all-time deadliest (ante, slot) position, or None.
+    def _deadliest_position(self, boss_only=False, clears=None, deaths=None):
+        """(ante, slot, round, death_rate) of the deadliest (ante, slot) position, or None.
+        Defaults to all-time counts; pass the rollout dicts for the last rollout only.
         boss_only restricts the search to Boss positions."""
+        clears = self.blind_position_clears if clears is None else clears
+        deaths = self.blind_position_deaths if deaths is None else deaths
         best = None
-        for position in set(self.blind_position_clears) | set(self.blind_position_deaths):
+        for position in set(clears) | set(deaths):
             if boss_only and position[1] != "Boss":
                 continue
-            attempts = self.blind_position_clears[position] + self.blind_position_deaths[position]
+            attempts = clears[position] + deaths[position]
             if attempts < DEADLIEST_MIN_ATTEMPTS:
                 continue
-            rate = self.blind_position_deaths[position] / attempts
+            rate = deaths[position] / attempts
             if rate > 0 and (best is None or rate > best[3]):
                 best = (position[0], position[1], self.blind_position_round.get(position) or None, rate)
         return best
+
+    @staticmethod
+    def _rollout_rates(clears, deaths):
+        """{key: death_rate} for keys with at least DEADLIEST_MIN_ATTEMPTS attempts."""
+        rates = {}
+        for key in set(clears) | set(deaths):
+            attempts = clears[key] + deaths[key]
+            if attempts >= DEADLIEST_MIN_ATTEMPTS:
+                rates[key] = deaths[key] / attempts
+        return rates
 
     def _policy_snapshot(self, final=False):
         """Numbers for the CLI policy-update line. final=True (training stopped) falls back to all-time
@@ -274,8 +290,19 @@ class BalatroMetricsCallback(BaseCallback):
         window = self.rollout if (self.rollout["episodes"] > 0 or not final) else self.totals
         n = window["episodes"]
         has = n > 0
-        deadliest_name, deadliest_rate = self._deadliest_blind()
-        boss_name, boss_rate = self._deadliest_blind(boss_only=True)
+        # Deadliest blinds come from the last rollout's counts; the cut-off line after an empty
+        # rollout falls back to all-time counts (same rule as the other figures)
+        if window is self.rollout:
+            name_dicts = (self.rollout_blind_clears_by_name, self.rollout_blind_deaths_by_name)
+            pos_dicts = (self.rollout_blind_position_clears, self.rollout_blind_position_deaths)
+        else:
+            name_dicts = (self.blind_clears_by_name, self.blind_deaths_by_name)
+            pos_dicts = (self.blind_position_clears, self.blind_position_deaths)
+        deadliest_name, deadliest_rate = self._deadliest_blind(*name_dicts)
+        boss_name, boss_rate = self._deadliest_blind(*name_dicts, boss_only=True)
+        deadliest_pos = self._deadliest_position(False, *pos_dicts)
+        boss_pos = self._deadliest_position(True, *pos_dicts)
+        prev_pos, prev_name = self._prev_rollout_position_rates, self._prev_rollout_name_rates
         return PolicySnapshot(
             steps=self.num_timesteps,
             episodes=self.totals["episodes"],
@@ -288,8 +315,11 @@ class BalatroMetricsCallback(BaseCallback):
             best_round=self.best_round,
             wins_total=self.totals["wins"],
             wins_rollout=self.rollout["wins"],
-            deadliest_position=self._deadliest_position(),
-            deadliest_boss_position=self._deadliest_position(boss_only=True),
+            deadliest_position=deadliest_pos,
+            deadliest_boss_position=boss_pos,
+            deadliest_position_prev=prev_pos.get(deadliest_pos[:2]) if deadliest_pos else None,
+            deadliest_boss_position_prev=prev_pos.get(boss_pos[:2]) if boss_pos else None,
+            deadliest_boss_prev=prev_name.get(boss_name) if boss_name else None,
             position_names=dict(self.blind_position_name),
             deadliest_blind=(deadliest_name, deadliest_rate) if deadliest_name else None,
             deadliest_boss=(boss_name, boss_rate) if boss_name else None,
@@ -983,6 +1013,11 @@ class BalatroMetricsCallback(BaseCallback):
 
         # CLI policy-update line (built before the rollout buffers reset)
         policy_snapshot = self._policy_snapshot()
+        if self.rollout["episodes"] > 0:  # keep the last rollout that actually had episodes for deltas
+            self._prev_rollout_position_rates = self._rollout_rates(
+                self.rollout_blind_position_clears, self.rollout_blind_position_deaths)
+            self._prev_rollout_name_rates = self._rollout_rates(
+                self.rollout_blind_clears_by_name, self.rollout_blind_deaths_by_name)
 
         # Reset rollout buffers
         self.rollout = Counter()

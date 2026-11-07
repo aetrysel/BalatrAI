@@ -424,3 +424,36 @@ def test_seeded_policy_line_from_callback_names_position_with_ante_and_round():
         h.step(info(ante=1, name="The Goad", rnd=3), done=True)
     h.cb._on_rollout_end()
     assert "Deadliest: A1 The Goad [round 3] 100%" in h.text()
+
+
+def test_deadliest_uses_last_rollout_with_delta_vs_same_blind():
+    h = Harness(OutputLevel.MINIMAL, seeded=True)
+    # Rollout 1: die to the ante-1 boss five times (100%)
+    for _ in range(5):
+        h.step(info(ante=1, action_taken=5, name="The Goad", rnd=3))
+        h.step(info(ante=1, name="The Goad", rnd=3), done=True)
+    h.cb._on_rollout_end()
+    assert "Deadliest: A1 The Goad [round 3] 100%" in h.lines[-1]
+    # Rollout 2: one more Goad death, then five Goad clears that die at A2 Small Blind
+    h.step(info(ante=1, action_taken=5, name="The Goad", rnd=3))
+    h.step(info(ante=1, name="The Goad", rnd=3), done=True)
+    for _ in range(5):
+        h.step(info(ante=1, action_taken=5, name="The Goad", rnd=3))
+        h.step(info(ante=2, name="The Goad", rnd=3, cleared=True))  # ante already bumped on the clear step
+        h.step(info(ante=2, action_taken=5, name="Small Blind", rnd=4))
+        h.step(info(ante=2, name="Small Blind", rnd=4), done=True)
+    h.cb._on_rollout_end()
+    line = h.lines[-1]
+    # Rollout-only counts: A2 Small 5/5 is deadliest (no previous rate -> no delta);
+    # the Goad is 1/6 = 17%, down 83pp from its 100% last rollout
+    assert "Deadliest: A2 Small Blind [round 4] 100% · boss: A1 The Goad [round 3] 17% (-83pp)" in line
+
+
+def test_deadliest_delta_formatting():
+    names = {(2, "Boss"): "The Mouth"}
+    r = CLIReporter(seeded=False)
+    text = r.format_policy(snap(deadliest_position_prev=0.5, deadliest_boss_prev=0.7))
+    assert "Deadliest: A2 Boss [round 6] 56% (+6pp) · boss: The Mouth 61% (-9pp)" in text
+    seeded = CLIReporter(seeded=True)
+    assert "Deadliest: A2 The Mouth [round 6] 56%" in seeded.format_policy(snap(position_names=names))
+    assert "pp)" not in seeded.format_policy(snap(position_names=names)).split("Deadliest")[1]
