@@ -33,6 +33,10 @@ from .environment.balatro_env import BalatroEnv
 from .utils.callbacks import BalatroMetricsCallback
 from .utils.cli_reporter import CLIReporter, KeyListener, OutputLevel, coerce_level
 from .utils.debug import set_debug_output
+from .utils.lifecycle import (
+    StopTrainingRequested, load_bridge_settings, save_bridge_settings, remove_session_flag,
+    validate_keybind, START_KEY_MODES,
+)
 from .utils.mappers import DECK_NAMES
 
 DEFAULT_TRAINING_STEPS = 10000
@@ -392,7 +396,12 @@ SETTING_LABELS = [
     ("debug_output",   "Debug output"),
     ("resume_run",     "Model"),
     ("log_group",      "Log group"),
+    ("start_key",      "Start keybind"),
+    ("start_key_mode", "Start key mode"),
 ]
+
+# Kept in rlbridge_settings.json (shared with the Lua mod), not in last_session.json
+BRIDGE_SETTING_KEYS = ("start_key", "start_key_mode")
 
 
 def load_last_settings() -> dict | None:
@@ -409,6 +418,29 @@ def save_last_settings(settings: dict) -> None:
     LAST_SESSION_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(LAST_SESSION_PATH, "w") as f:
         json.dump(settings, f, indent=2)
+
+
+def select_start_key(current: str) -> str:
+    """Prompt for the in-game start keybind (e.g. ctrl+r, ctrl+shift+t, f9). Returns the normalised string."""
+    while True:
+        raw = input(f"Start keybind [{current}] (modifiers ctrl/shift/alt + key, e.g. ctrl+shift+t, f9): ").strip()
+        if raw == "":
+            return current
+        key = validate_keybind(raw)
+        if key:
+            return key
+        print("  Invalid keybind. Use zero or more of ctrl/shift/alt joined with '+', then one key (a-z, 0-9, f1-f18, space...).")
+
+
+def select_start_key_mode(current: str) -> str:
+    """Prompt for the start key mode. arm: key starts/wakes a session. toggle: key also stops a running one."""
+    while True:
+        raw = input(f"Start key mode — arm (key starts a session) or toggle (key also stops it) [{current}]: ").strip().lower()
+        if raw == "":
+            return current
+        if raw in START_KEY_MODES:
+            return raw
+        print(f"  Enter one of: {', '.join(START_KEY_MODES)}.")
 
 
 def validate_settings(settings: dict) -> dict:
@@ -470,6 +502,10 @@ def edit_setting(key: str, settings: dict, seeds: list) -> list:
         if existing_group and existing_group != settings.get("log_group"):
             print(f"  Log group → {existing_group} (holds this run's TensorBoard entry)")
             settings["log_group"] = existing_group
+    elif key == "start_key":
+        settings["start_key"] = select_start_key(settings["start_key"])
+    elif key == "start_key_mode":
+        settings["start_key_mode"] = select_start_key_mode(settings["start_key_mode"])
     elif key == "log_group":
         default = settings.get("resume_run") and find_run_log_group(settings["resume_run"])
         settings["log_group"] = select_log_group(LOGS_ROOT, default=default)
@@ -483,13 +519,17 @@ def configure_session(seeds: list) -> tuple[dict, list]:
     """
     defaults = {"seed": None, "deck": DECK_NAMES[0], "training_steps": DEFAULT_TRAINING_STEPS,
                 "endless": False, "joker_sell_mode": "shop", "debug": False, "output_level": int(OutputLevel.ROUND), "debug_output": False, "resume_run": None, "new_run_name": "run", "log_group": None}
+    bridge = load_bridge_settings()
+    defaults.update({k: bridge[k] for k in BRIDGE_SETTING_KEYS})
     saved = load_last_settings()
     if saved is None:
         settings = dict(defaults)
         for key, _ in SETTING_LABELS:
+            if key in BRIDGE_SETTING_KEYS:
+                continue
             seeds = edit_setting(key, settings, seeds)
     else:
-        settings = validate_settings({**defaults, **saved})
+        settings = validate_settings({**defaults, **{k: v for k, v in saved.items() if k not in BRIDGE_SETTING_KEYS}})
         if not settings["log_group"]:
             seeds = edit_setting("log_group", settings, seeds)
 
@@ -595,6 +635,12 @@ def create_callbacks(save_freq=1000, checkpoint_dir="./models/", reporter=None, 
     return callbacks
 
 
+def cleanup_environment(env) -> None:
+    """Clean up the BalatroEnv under its wrappers (gymnasium wrappers don't forward custom attributes)."""
+    if env is not None:
+        env.unwrapped.cleanup()
+
+
 def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resume_from=None, checkpoint_dir="./models/", seed=None, deck="Red Deck", is_endless=False, run_label: str = "", n_steps: int = 4096, tb_session_dir: str = "./tensorboard_logs/MaskablePPO", run_dir: str = "", history_dir: str = "game_history_logs", joker_sell_mode: str = "shop", reporter=None):
     """
     Main training function
@@ -616,6 +662,7 @@ def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resu
     logger.info(f"Training for {total_timesteps} timesteps")
 
     metrics_callback = None
+    env = None
     try:
         env = create_environment(seed=seed, deck=deck, is_endless=is_endless, run_label=run_label, run_dir=run_dir,
                                  history_dir=history_dir, joker_sell_mode=joker_sell_mode)
@@ -650,28 +697,22 @@ def train_agent(total_timesteps=100000, save_path="./models/balatro_final", resu
         model.save(save_path)
         logger.info(f"Model saved to {save_path}")
 
-        if hasattr(env, 'cleanup'):
-            env.cleanup()
-        elif hasattr(env.env, 'cleanup'):  # Monitor wrapper
-            env.env.cleanup()
+        cleanup_environment(env)
 
         return model
 
-    except KeyboardInterrupt:
-        logger.info("Training interrupted by user")
+    except (KeyboardInterrupt, StopTrainingRequested) as e:
+        if isinstance(e, StopTrainingRequested):
+            logger.info("Training stopped by the in-game start key (toggle mode)")
+        else:
+            logger.info("Training interrupted by user")
         if metrics_callback is not None:
             metrics_callback.print_cutoff()  # in-progress episode (CUT OFF) + final stats
-        if hasattr(env, 'cleanup'):
-            env.cleanup()
-        elif hasattr(env.env, 'cleanup'):
-            env.env.cleanup()
+        cleanup_environment(env)
         return None
     except Exception as e:
         logger.error(f"Training failed: {e}")
-        if hasattr(env, 'cleanup'):
-            env.cleanup()
-        elif hasattr(env.env, 'cleanup'):
-            env.env.cleanup()
+        cleanup_environment(env)
         raise
 
 
@@ -711,7 +752,7 @@ def test_trained_model(model_path, num_episodes=5):
     avg_reward = sum(episode_rewards) / len(episode_rewards)
     logger.info(f"Average reward over {num_episodes} episodes: {avg_reward:.2f}")
 
-    env.cleanup()
+    cleanup_environment(env)
     return episode_rewards
 
 
@@ -747,7 +788,8 @@ if __name__ == "__main__":
         # Later launches continue this run by default
         settings["resume_run"] = run_name
     checkpoint_dir = f"./models/{run_name}/"
-    save_last_settings(settings)
+    save_last_settings({k: v for k, v in settings.items() if k not in BRIDGE_SETTING_KEYS})
+    save_bridge_settings({k: settings[k] for k in BRIDGE_SETTING_KEYS})
 
     group_dir = LOGS_ROOT / settings["log_group"]
     # Same TB entry every session of a run; history gets a new file per session
@@ -774,7 +816,7 @@ if __name__ == "__main__":
     print("1. ✅ Balatro is running with RLBridge mod")
     print("2. ✅ Balatro is in menu state")
 
-    input("Press Enter to start training then press 'R' in Balatro)...")
+    input("Press Enter to start training (Balatro wakes automatically, or press your start key in game)...")
 
     # Live output-level switching (keys 1-5); no-op when stdin is not a terminal
     reporter = CLIReporter(level=coerce_level(settings.get("output_level")),
@@ -814,4 +856,5 @@ if __name__ == "__main__":
     finally:
         key_listener.stop()  # restore the terminal
         # Pipes will be cleaned up by the environment
+        remove_session_flag()  # fallback if the environment never got created
         print("🧹 Training session ended")

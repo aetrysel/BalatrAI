@@ -299,4 +299,161 @@ function UTIL.is_game_won_round_eval()
     return ante == 9 and blind_states and blind_states.Boss == "Defeated" or false
 end
 
+-- ===== Persistent bridge settings + session-ready flag (shared with ai/utils/lifecycle.py) =====
+
+local DEFAULT_SETTINGS = {
+    start_key = "ctrl+r",
+    start_key_mode = "arm",
+    auto_wake = true,
+    win_hold_secs = 60,
+    win_hold_secs_endless = 15,
+}
+
+--- Path of rlbridge_settings.json: Balatro's LOVE save directory (Linux ~/.local/share/love/Balatro,
+--- Windows %APPDATA%/Balatro; same folder as lovely.log). Persistent and outside the repo, so git never
+--- tracks it. BALATRO_SETTINGS_PATH overrides it (Python honours the same variable).
+--- @return string
+function UTIL.get_settings_path()
+    local override = os.getenv("BALATRO_SETTINGS_PATH")
+    if override and override ~= "" then
+        return override
+    end
+    local dir
+    if love and love.filesystem and love.filesystem.getSaveDirectory then
+        local ok, result = pcall(love.filesystem.getSaveDirectory)
+        if ok and type(result) == "string" and result ~= "" then
+            dir = result
+        end
+    end
+    if not dir then
+        local appdata = os.getenv("APPDATA")
+        if appdata then
+            dir = appdata .. "/Balatro"
+        else
+            dir = (os.getenv("XDG_DATA_HOME") or ((os.getenv("HOME") or "") .. "/.local/share")) .. "/love/Balatro"
+        end
+    end
+    return dir .. "/rlbridge_settings.json"
+end
+
+--- Read rlbridge_settings.json and merge it over the defaults (invalid or missing values fall back)
+--- @return table settings
+function UTIL.load_settings()
+    local settings = {}
+    for k, v in pairs(DEFAULT_SETTINGS) do settings[k] = v end
+    local f = io.open(UTIL.get_settings_path(), "r")
+    if not f then
+        return settings
+    end
+    local ok, data = pcall(function() return require("dkjson").decode(f:read("*all")) end)
+    f:close()
+    if not ok or type(data) ~= "table" then
+        return settings
+    end
+    if type(data.start_key) == "string" and UTIL.parse_keybind(data.start_key) then
+        settings.start_key = data.start_key
+    end
+    if data.start_key_mode == "arm" or data.start_key_mode == "toggle" then
+        settings.start_key_mode = data.start_key_mode
+    end
+    if type(data.auto_wake) == "boolean" then
+        settings.auto_wake = data.auto_wake
+    end
+    for _, name in ipairs({ "win_hold_secs", "win_hold_secs_endless" }) do
+        if type(data[name]) == "number" and data[name] >= 0 then
+            settings[name] = data[name]
+        end
+    end
+    return settings
+end
+
+--- Parse "ctrl+shift+t" / "f9" into { key = "t", ctrl = true, shift = true, alt = false }
+--- Modifiers: ctrl, shift, alt (left or right physical key). Exactly one non-modifier key.
+--- @param text string
+--- @return table|nil Parsed keybind, nil if the format is invalid
+function UTIL.parse_keybind(text)
+    if type(text) ~= "string" then return nil end
+    local tokens = {}
+    for token in (text:lower() .. "+"):gmatch("([^+]*)%+") do
+        token = token:gsub("^%s+", ""):gsub("%s+$", "")
+        if token == "" then return nil end
+        tokens[#tokens + 1] = token
+    end
+    local parsed = { ctrl = false, shift = false, alt = false }
+    local key = table.remove(tokens)
+    for _, mod in ipairs(tokens) do
+        if mod == "control" then mod = "ctrl" end
+        if mod ~= "ctrl" and mod ~= "shift" and mod ~= "alt" then return nil end
+        if parsed[mod] then return nil end
+        parsed[mod] = true
+    end
+    if key == "enter" then key = "return" end -- LOVE calls it "return"
+    if key == "ctrl" or key == "shift" or key == "alt" or key == "control" then return nil end
+    parsed.key = key
+    return parsed
+end
+
+--- True if the pressed love key plus the currently held modifiers exactly match the parsed keybind
+--- @param parsed table Result of parse_keybind
+--- @param key string love.keypressed key name
+--- @return boolean
+function UTIL.keybind_matches(parsed, key)
+    if not parsed or key ~= parsed.key then return false end
+    local kb = love.keyboard
+    local ctrl = kb.isDown("lctrl", "rctrl")
+    local shift = kb.isDown("lshift", "rshift")
+    local alt = kb.isDown("lalt", "ralt")
+    return ctrl == parsed.ctrl and shift == parsed.shift and alt == parsed.alt
+end
+
+--- Path of the session-ready flag Python writes after creating the FIFOs (a plain file, so checking
+--- it can never block). BALATRO_SESSION_FLAG overrides it (parallel runs use one per run dir).
+--- @return string
+function UTIL.get_session_flag_path()
+    local override = os.getenv("BALATRO_SESSION_FLAG")
+    if override and override ~= "" then
+        return override
+    end
+    local appdata = os.getenv("APPDATA")
+    if appdata then
+        return appdata .. "/Balatro/Mods/RLBridge/session_ready"
+    end
+    return "/tmp/balatro_session_ready"
+end
+
+--- Is a process alive? kill(pid, 0) via FFI (Linux and macOS); EPERM still means it exists.
+--- @return boolean|nil nil when it cannot be determined (Windows or no FFI), so the caller trusts the flag
+local kill_declared = false
+local function os_pid_alive(pid)
+    if (os.getenv("OS") or "") == "Windows_NT" then return nil end
+    local ok, result = pcall(function()
+        local ffi = require("ffi")
+        if not kill_declared then
+            ffi.cdef("int kill(int pid, int sig);")
+            kill_declared = true
+        end
+        if ffi.C.kill(pid, 0) == 0 then return true end
+        return ffi.errno() == 1 -- EPERM
+    end)
+    if ok then return result end
+    return nil
+end
+
+--- True when a Python session is waiting: flag file present and its PID alive (when that can be checked).
+--- The PID check ignores a stale flag left by a killed Python, which would otherwise freeze the
+--- game in a blocking FIFO open.
+--- @return boolean
+function UTIL.session_ready()
+    local f = io.open(UTIL.get_session_flag_path(), "r")
+    if not f then
+        return false
+    end
+    local pid = tonumber((f:read("*line") or ""):match("%d+"))
+    f:close()
+    if pid and os_pid_alive(pid) == false then
+        return false
+    end
+    return true
+end
+
 return UTIL

@@ -19,6 +19,7 @@ LOVELY_LOG_PATH = Path(os.environ.get(
     Path.home() / ".local/share/love/Balatro/lovely.log"
 ))
 from ..utils.communication import BalatroPipeIO, BalatroSocketIO
+from ..utils.lifecycle import StopTrainingRequested, remove_session_flag
 from .reward import BalatroRewardCalculator
 from ..utils.mappers import BalatroStateMapper, BalatroActionMapper
 from ..utils.replay import ReplaySystem
@@ -115,6 +116,13 @@ class BalatroEnv(gym.Env):
         self.state_mapper = BalatroStateMapper(observation_size=self.OBSERVATION_SIZE, max_actions=self.MAX_ACTIONS)
         self.action_mapper = BalatroActionMapper(action_slices=slices)
     
+    def _wait_for_request(self):
+        """Next request from Balatro; raises StopTrainingRequested if the in-game start key (toggle mode) asked to stop."""
+        request = self.pipe_io.wait_for_request()
+        if request and request.get('stop_requested'):
+            raise StopTrainingRequested()
+        return request
+
     def reset(self, seed=None, options=None):
         """
         Reset the environment for a new episode
@@ -150,7 +158,7 @@ class BalatroEnv(gym.Env):
                 pass
 
         # Wait for initial request from Balatro (game start)
-        initial_request = self.pipe_io.wait_for_request()
+        initial_request = self._wait_for_request()
         if not initial_request:
             raise RuntimeError("Failed to receive initial request from Balatro")
 
@@ -158,7 +166,7 @@ class BalatroEnv(gym.Env):
             restart_response = {"action": 6, "params": [], "seed": self.seed, "deck": self.deck}
 
             self.pipe_io.send_response(restart_response)
-            initial_request = self.pipe_io.wait_for_request()
+            initial_request = self._wait_for_request()
             if not initial_request:
                 raise RuntimeError("Failed to receive initial request from Balatro after restart")
         # Process initial state for SB3
@@ -256,7 +264,7 @@ class BalatroEnv(gym.Env):
                 # reset() will block in wait_for_request() until new run starts
                 return win_obs, win_reward, True, False, win_info
             # Endless: count as win but continue — consume next state (SHOP after cash_out)
-            next_request = self.pipe_io.wait_for_request()
+            next_request = self._wait_for_request()
             if not next_request:
                 self.history_logger.log_episode_end(self._episode_accumulated_reward, self.reward_calculator.episode_reward_breakdown)
                 return win_obs, win_reward, True, False, {**win_info, "timeout": True}
@@ -272,7 +280,7 @@ class BalatroEnv(gym.Env):
             return self.state_mapper.process_game_state(self.current_state), win_reward, False, False, win_info
 
         # Wait for next request with new game state
-        next_request = self.pipe_io.wait_for_request()
+        next_request = self._wait_for_request()
         if not next_request:
             self.game_over = True
             observation = self.state_mapper.process_game_state(self.current_state)
@@ -327,7 +335,7 @@ class BalatroEnv(gym.Env):
             restart_response = {"action": 6, "params": [], "seed": self.seed, "deck": self.deck}
 
             self.pipe_io.send_response(restart_response)
-            next_request = self.pipe_io.wait_for_request()
+            next_request = self._wait_for_request()
             if not next_request:
                 self.history_logger.log_episode_end(self._episode_accumulated_reward, self.reward_calculator.episode_reward_breakdown)
                 return (
@@ -417,7 +425,12 @@ class BalatroEnv(gym.Env):
         Clean up environment resources
 
         Call this when shutting down to clean up pipe communication.
+        Tells Balatro to return to the main menu and idle (best-effort SHUTDOWN) first. The
+        session flag is removed before that so the idle game cannot auto-wake onto a dying session.
+        Safe to call more than once.
         """
+        remove_session_flag()
+        self.pipe_io.send_shutdown()
         self.pipe_io.cleanup()
         self.history_logger.close()
 
