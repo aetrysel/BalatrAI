@@ -13,14 +13,29 @@ local utils = require("utils")
 local last_combined_hash = nil
 local pending_action = nil
 local rl_training_active = false
-local last_key_pressed = nil
+local start_key_pressed = false
 local cash_out_executed = false
 local retry_count = 0
 
 local blind_forced = false
 local blind_force_timer = 0
-local win_screen_shown = false
 local win_overlay_handled = false
+
+-- Lifecycle: settings come from rlbridge_settings.json (re-read on each wake/arm and idle tick)
+local settings = utils.load_settings()
+local stop_requested = false        -- toggle mode: next request carries stop_requested = true
+local last_wake_check = 0           -- love.timer.getTime() of the last idle auto-wake poll
+local wake_blocked_until = 0        -- no auto-wake right after a stop, so a dying session's flag can't re-arm us
+local armed = false                 -- start key pressed, waiting for a Python session to appear (separate from rl_training_active)
+local waiting_prompted = false      -- "Training is waiting" notice already shown for the current session
+local WAKE_POLL_SECS = 1.0
+local SOCKET_WAKE_POLL_SECS = 3.0   -- socket mode has no flag file: probe the viewer server instead
+local WAKE_COOLDOWN_SECS = 3.0
+
+-- Win hold: freezes the AI (no requests) for a fixed real-time duration, then runs the end action.
+-- nil when not holding; otherwise { start, duration, endless, source }
+local win_hold = nil
+local test_win_hold_done = false
 
 local SHOP_DEBUG = false -- Set to true to enable shop state debug logging
 
@@ -33,26 +48,156 @@ local function is_pack_state(state)
         or (G.STATES.SMODS_BOOSTER_OPENED ~= nil and state == G.STATES.SMODS_BOOSTER_OPENED)
 end
 
+--- Short on-screen text (vanilla attention_text: non-blocking, fades by itself), also logged to lovely.log
+--- @param text string
+local function notify(text)
+    utils.log_ai("NOTICE: " .. text)
+    pcall(function()
+        if attention_text and G and G.ROOM then
+            attention_text({
+                text = text, scale = 0.6, hold = 2.5, align = "cm",
+                pos = { x = G.ROOM.T.w / 2, y = G.ROOM.T.h / 2 - 1 },
+            })
+        end
+    end)
+end
+
+--- Is the Python side ready? Pipe mode: live session flag (a plain file, can't block).
+--- Socket mode: a short-timeout connect, which keeps the connection on success.
+local function session_available()
+    if communication.get_mode() == "socket" then
+        return communication.try_connect()
+    end
+    return utils.session_ready()
+end
+
+--- Arm a session: enable communication and start answering requests
+--- @param reason string Logged
+local function arm_session(reason)
+    settings = utils.load_settings()
+    armed = false
+    waiting_prompted = true
+    communication.init()
+    rl_training_active = true
+    stop_requested = false
+    pending_action = nil
+    last_combined_hash = nil
+    utils.log_ai("\n\nRL Training STARTED (" .. reason .. ")")
+end
+
+--- Stop the session and return the game to the main menu, where it idles until the next wake
+--- Triggers: SHUTDOWN response, lost connection (nil/EOF/write error), start key in toggle mode.
+--- @param reason string Logged
+function AI.stop_session(reason)
+    utils.log_ai("RL Training STOPPED (" .. tostring(reason) .. ") — returning to main menu")
+    if G.OVERLAY_MENU and G.FUNCS.exit_overlay_menu then
+        pcall(G.FUNCS.exit_overlay_menu)
+    end
+    if G.STAGE == G.STAGES.RUN and G.FUNCS.go_to_menu then
+        local ok, err = pcall(G.FUNCS.go_to_menu)
+        if not ok then
+            utils.log_ai("go_to_menu failed: " .. tostring(err))
+        end
+    end
+    rl_training_active = false
+    communication.close()
+    pending_action = nil
+    last_combined_hash = nil
+    win_hold = nil
+    stop_requested = false
+    retry_count = 0
+    armed = false
+    if not settings.auto_start then
+        notify("JimBot disarmed")
+    end
+    wake_blocked_until = love.timer.getTime() + WAKE_COOLDOWN_SECS
+end
+
+--- Freeze the AI for the win screen, then return to normal play (real time, game speed independent)
+--- Every win path calls this; a second call while holding is ignored.
+--- Duration comes from win_hold_secs / win_hold_secs_endless in rlbridge_settings.json.
+--- When it ends: endless dismisses the overlay and keeps playing; otherwise go to the menu so the
+--- START_RUN auto-skip begins the next run. The "test" source (BALATRO_TEST_WIN_HOLD) just resumes.
+--- @param source string Which win path triggered it (logged): overlay, state_win, cash_out, boss, test
+function AI.begin_win_hold(source)
+    if win_hold then
+        return
+    end
+    local endless = utils.get_run_config().endless and true or false
+    settings = utils.load_settings()
+    local duration = endless and settings.win_hold_secs_endless or settings.win_hold_secs
+    win_hold = { start = love.timer.getTime(), duration = duration, endless = endless, source = source }
+    pending_action = nil
+    last_combined_hash = nil
+    utils.log_ai(string.format("Win hold started (%s): %ss%s", source, tostring(duration), endless and " (endless)" or ""))
+end
+
+local function end_win_hold()
+    local hold = win_hold
+    win_hold = nil
+    last_combined_hash = nil
+    utils.log_ai(string.format("Win hold finished (%s) after %.1fs", hold.source, love.timer.getTime() - hold.start))
+    if hold.source == "test" then
+        return
+    end
+    if G.OVERLAY_MENU then
+        G.FUNCS.exit_overlay_menu()
+    end
+    if hold.endless then
+        utils.log_ai("Continuing in endless mode")
+    else
+        G.FUNCS.go_to_menu()
+    end
+end
+
 --- Initialize AI system
---- Sets up communication and prepares the AI for operation
+--- Installs hooks only; communication stays off until a session is armed
 --- @return nil
 function AI.init()
-    communication.init()
     require("stats").install()
     require("joker_tracker").install()
 
     -- Hook into Love2D keyboard events
     if love and love.keypressed then
         local original_keypressed = love.keypressed
-        love.keypressed = function(key)
-            -- Store the key press for our AI
-            last_key_pressed = key
+        love.keypressed = function(key, scancode, isrepeat)
+            if not isrepeat and utils.keybind_matches(utils.parse_keybind(settings.start_key), key) then
+                start_key_pressed = true
+            end
 
             -- Call original function
             if original_keypressed then
-                original_keypressed(key)
+                original_keypressed(key, scancode, isrepeat)
             end
         end
+    end
+end
+
+--- Handle a start key press
+--- Active: toggle mode requests a clean stop, arm mode does nothing.
+--- Idle and disarmed: arm; start right away if a Python session is already waiting.
+--- Armed but not connected yet: disarm.
+local function handle_start_key()
+    if rl_training_active then
+        if settings.start_key_mode == "toggle" then
+            stop_requested = true
+            last_combined_hash = nil -- force a request as soon as actions are available
+            utils.log_ai("Stop requested via start key — stopping at the next request")
+        end
+        return
+    end
+    settings = utils.load_settings()
+    if armed and not settings.auto_start then
+        armed = false
+        notify("JimBot disarmed")
+        return
+    end
+    if session_available() then
+        notify("JimBot armed — starting")
+        arm_session("start key")
+    else
+        armed = true
+        notify("JimBot armed — waiting for training")
     end
 end
 
@@ -60,50 +205,65 @@ end
 --- Monitors game state changes, handles communication, and executes AI actions
 --- @return nil
 function AI.update()
-    if win_screen_active then
-        win_screen_timer = win_screen_timer + (G.FPS_CAP and (1/G.FPS_CAP) or 0.016)
-        if win_screen_timer > 30.0 then
-            utils.log_ai("Win screen timeout — forcing resume")
-            win_screen_active = false
-            win_screen_timer = 0
+    if start_key_pressed then
+        start_key_pressed = false
+        handle_start_key()
+    end
+
+    -- Inactive: stay completely quiet (no auto-skip, no FIFO opens). Only a cheap poll runs once a second:
+    -- while armed (or auto_start) it connects as soon as a session appears; otherwise it only shows a
+    -- one-time "Training is waiting" notice (pipe mode: reads the flag file, never connects).
+    if not rl_training_active then
+        local now = love.timer.getTime()
+        local socket_mode = communication.get_mode() == "socket"
+        if now - last_wake_check >= (socket_mode and SOCKET_WAKE_POLL_SECS or WAKE_POLL_SECS) then
+            last_wake_check = now
+            settings = utils.load_settings()
+            if (armed or settings.auto_start) and now >= wake_blocked_until then
+                if session_available() then
+                    arm_session(armed and "armed: session ready" or "auto-start: session ready")
+                end
+            elseif not socket_mode and now >= wake_blocked_until then
+                if utils.session_ready() then
+                    if not waiting_prompted then
+                        waiting_prompted = true
+                        notify("Training is waiting — press " .. settings.start_key .. " to start")
+                    end
+                else
+                    waiting_prompted = false
+                end
+            end
         end
         return
     end
-    -- Win overlay ("You Win!"): endless dismisses it and keeps playing, otherwise go to menu for a new run
+
+    if win_hold then
+        if love.timer.getTime() - win_hold.start >= win_hold.duration then
+            end_win_hold()
+        end
+        return
+    end
+
+    -- Debug: exercise the win hold without a real win (first ROUND_EVAL of the session)
+    if os.getenv("BALATRO_TEST_WIN_HOLD") == "1" and not test_win_hold_done and G.STATE == G.STATES.ROUND_EVAL then
+        test_win_hold_done = true
+        utils.log_ai("TEST WIN HOLD")
+        AI.begin_win_hold("test")
+        return
+    end
+
+    -- Win overlay ("You Win!"): hold the win screen, then endless dismisses it and keeps playing, otherwise new run
     if G.STATE == G.STATES.MENU then
         win_overlay_handled = false
     elseif G.GAME and G.GAME.won and G.OVERLAY_MENU and not win_overlay_handled then
         win_overlay_handled = true
-        G.FUNCS.exit_overlay_menu()
-        if utils.get_run_config().endless then
-            utils.log_ai("Win overlay dismissed — continuing in endless mode")
-        else
-            utils.log_ai("Win overlay — returning to menu for a new run")
-            G.FUNCS.go_to_menu()
-        end
-        last_combined_hash = nil
+        AI.begin_win_hold("overlay")
         return
     end
     -- Allow pack states through even if controller is locked (card deal animations set locking_buttons)
     if not is_pack_state(G.STATE) and (G.CONTROLLER.locking_buttons or G.CONTROLLER.interrupt_inputs or G.CONTROLLER.locks[1]) then
         return
     end
-    if last_key_pressed then
-        if last_key_pressed == "r" then
-            if not rl_training_active then
-                rl_training_active = true
-                utils.log_ai("\n\nRL Training STARTED (R pressed)")
-            end
-        end
-        -- Clear the key press
-        last_key_pressed = nil
-    end
-
-    -- Don't process AI requests unless RL training is active
-    if not rl_training_active then
-        return
-    end
-
     -- Get current game state
     local current_state = output.get_game_state()
     local available_actions = action.get_available_actions()
@@ -165,12 +325,21 @@ function AI.update()
         current_state.retry_count = retry_count
         
         -- Request action from AI (only if NOT auto-skipped)
-        local ai_response = communication.request_action(current_state, available_actions)
+        local stopping = stop_requested
+        stop_requested = false
+        local ai_response = communication.request_action(current_state, available_actions, stopping)
 
-        if ai_response then
-            pending_action = ai_response
-            last_combined_hash = combined_hash
+        if not ai_response then
+            -- nil = could not open, write failed or EOF: Python is gone. Stop instead of retrying every frame.
+            AI.stop_session("disconnected")
+            return
         end
+        if ai_response.action == "SHUTDOWN" then
+            AI.stop_session(stopping and "stop key" or "shutdown")
+            return
+        end
+        pending_action = ai_response
+        last_combined_hash = combined_hash
     end
 
     -- Execute pending action
@@ -186,16 +355,18 @@ function AI.update()
         end
         
         if action_still_valid then
-            local exec_params = pending_action.params or {}
-            if pending_action.seed then
-                exec_params.seed = pending_action.seed
+            -- Local copy: executing may call begin_win_hold, which clears pending_action
+            local executing = pending_action
+            local exec_params = executing.params or {}
+            if executing.seed then
+                exec_params.seed = executing.seed
             end
-            if pending_action.deck then
-                exec_params.deck = pending_action.deck
+            if executing.deck then
+                exec_params.deck = executing.deck
             end
-            local result = action.execute_action(pending_action.action, exec_params)
+            local result = action.execute_action(executing.action, exec_params)
             if result.success then
-                utils.log_ai("Action executed successfully: " .. pending_action.action)
+                utils.log_ai("Action executed successfully: " .. executing.action)
                 retry_count = 0
                 pending_action = nil
                 -- Re-request even if the action left the observed state unchanged
@@ -325,23 +496,8 @@ function AI.execute_auto_skip_action(current_state, available_actions)
         local chips_beaten = G.GAME and blind_obj and (G.GAME.chips >= blind_obj.chips) or false
 
         if current_ante == 9 and is_boss then
-            utils.log_ai("Ante 8 boss beaten — restarting run...")
-            if G.FUNCS and G.FUNCS.go_to_menu then
-                G.FUNCS.go_to_menu()
-                G.E_MANAGER:add_event(Event({
-                    trigger = 'after', delay = 1.5,
-                    func = function()
-                        if G.FUNCS.start_run then
-                            G.FUNCS.start_run()
-                        elseif G.FUNCS.play_new_run then
-                            G.FUNCS.play_new_run()
-                        end
-                        return true
-                    end
-                }))
-            end
-            -- state_transition_timer = 30.0
-            last_combined_hash = nil
+            utils.log_ai("Ante 8 boss beaten")
+            AI.begin_win_hold("boss")
             return
         end
         -- Normal cash out
@@ -359,18 +515,9 @@ function AI.execute_auto_skip_action(current_state, available_actions)
         return
     end
     
-    -- WIN state: display win screen for 30s, then restart run
+    -- WIN state: hold the win screen, then the next run starts
     if current_state.state == G.STATES.WIN then
-        if not win_screen_shown then
-            win_screen_active = true
-            win_screen_timer = 0
-            win_screen_shown = true
-        else
-            win_screen_shown = false
-            local input = require("input")
-            input.start_run({ seed = "" })
-            last_combined_hash = nil
-        end
+        AI.begin_win_hold("state_win")
         return
     end
 

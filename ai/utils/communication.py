@@ -4,9 +4,25 @@ import os
 import platform
 from typing import Dict, Any, Optional
 
+import select
 import socket
 import threading
-from typing import Dict, Any, Optional
+
+from .lifecycle import (
+    load_bridge_settings, remove_session_flag, write_session_flag, StopTrainingRequested,  # noqa: F401
+)
+
+def print_waiting_message() -> None:
+    settings = load_bridge_settings()
+    if settings["auto_start"]:
+        print(f"Waiting for Balatro… (auto-wake, or {settings['start_key']} in game)")
+    else:
+        print(f"Waiting for Balatro… press {settings['start_key']} in game to start")
+
+
+SHUTDOWN_RESPONSE = {"action": "SHUTDOWN"}
+# After SHUTDOWN, wait briefly for a request Lua may already be sending so its write doesn't hit a closed pipe
+SHUTDOWN_DRAIN_SECS = 0.5
 
 
 class BalatroSocketIO:
@@ -30,17 +46,19 @@ class BalatroSocketIO:
         self._conn = None
         self._server_sock = None
 
+        remove_session_flag()  # drop a stale flag from a crashed session
         self._wait_for_connection()
 
     def _wait_for_connection(self):
         self.logger.info(f"Viewer socket listening on {self.host}:{self.port}")
-        self.logger.info("Start Balatro on your PC and press 'R' to connect...")
 
         self._server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._server_sock.bind((self.host, self.port))
         self._server_sock.listen(1)
 
+        write_session_flag()
+        print_waiting_message()
         self._conn, addr = self._server_sock.accept()
         self._conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.logger.info(f"Balatro connected from {addr}")
@@ -83,6 +101,18 @@ class BalatroSocketIO:
             self.logger.error(f"Error sending response: {e}")
             return False
 
+    def send_shutdown(self) -> bool:
+        """Best-effort SHUTDOWN response so Lua returns to the menu and idles. Never raises or hangs."""
+        if not self._conn:
+            return False
+        try:
+            self._conn.settimeout(1.0)
+            self._conn.sendall((json.dumps(SHUTDOWN_RESPONSE) + "\n").encode("utf-8"))
+            return True
+        except Exception as e:
+            self.logger.debug(f"SHUTDOWN not delivered: {e}")
+            return False
+
     def cleanup_handles(self):
         for handle in [self.request_handle, self.response_handle]:
             if handle:
@@ -100,6 +130,7 @@ class BalatroSocketIO:
             self._conn = None
 
     def cleanup(self):
+        remove_session_flag()
         self.cleanup_handles()
         if self._server_sock:
             try:
@@ -123,8 +154,15 @@ class BalatroPipeIO:
             self.request_pipe = '/tmp/balatro_request'
             self.response_pipe = '/tmp/balatro_response'
 
+        remove_session_flag()  # drop a stale flag from a crashed session
         self.create_pipes()
-        self.open_persistent_handles()
+        write_session_flag()
+        try:
+            self.open_persistent_handles()
+        except BaseException:
+            # Ctrl+C while waiting for Balatro: don't leave the flag or FIFOs behind
+            self.cleanup()
+            raise
 
     def create_pipes(self) -> None:
         if platform.system() == "Windows":
@@ -164,7 +202,7 @@ class BalatroPipeIO:
         import win32file
 
         self.logger.info("Creating Windows named pipe servers...")
-        self.logger.info("Press 'R' in Balatro now to activate RL training!")
+        print_waiting_message()
 
         self._req_pipe_handle = win32pipe.CreateNamedPipe(
             self.request_pipe,
@@ -195,7 +233,7 @@ class BalatroPipeIO:
         import threading
 
         self.logger.info("Creating Unix pipes...")
-        self.logger.info("Press 'R' in Balatro now to activate RL training!")
+        print_waiting_message()
 
         req_fd = None
         res_fd = None
@@ -209,14 +247,14 @@ class BalatroPipeIO:
             res_fd = os.open(self.response_pipe, os.O_WRONLY)
 
         # Open both ends concurrently to avoid blocking
-        req_thread = threading.Thread(target=open_request)
-        res_thread = threading.Thread(target=open_response)
+        # Daemon threads so Ctrl+C while waiting for Balatro can still exit the process
+        req_thread = threading.Thread(target=open_request, daemon=True)
+        res_thread = threading.Thread(target=open_response, daemon=True)
         req_thread.start()
         res_thread.start()
         req_thread.join()
         res_thread.join()
 
-        self.logger.info("Waiting for Balatro to connect to pipes...")
         self.request_handle = os.fdopen(req_fd, 'r', encoding='utf-8')
         self.response_handle = os.fdopen(res_fd, 'w', encoding='utf-8')
         self.logger.info("Balatro connected!")
@@ -253,6 +291,43 @@ class BalatroPipeIO:
             self.logger.error(f"Error sending response: {e}")
             return False
 
+    def send_shutdown(self) -> bool:
+        """
+        Best-effort SHUTDOWN response so Lua returns to the menu and idles. Never raises or hangs.
+
+        Writes straight to the pipe fd in non-blocking mode (a 22-byte write fits the pipe buffer),
+        so it is skipped silently if the write end is closed, nobody reads, or the pipe is full.
+        Afterwards waits briefly for a request Lua may already be sending, so its write does not
+        land on a closed pipe.
+        """
+        try:
+            handle = self.response_handle
+            if handle is None:
+                return False
+            data = (json.dumps(SHUTDOWN_RESPONSE) + "\n").encode("utf-8")
+            if platform.system() == "Windows":
+                handle.write(data.decode("utf-8"))
+                handle.flush()
+                return True
+            fd = handle.fileno()
+            os.set_blocking(fd, False)
+            os.write(fd, data)
+        except Exception as e:  # BrokenPipeError, BlockingIOError, closed file, ...
+            self.logger.debug(f"SHUTDOWN not delivered: {e}")
+            return False
+        self._drain_pending_request()
+        return True
+
+    def _drain_pending_request(self) -> None:
+        try:
+            if self.request_handle is None:
+                return
+            ready, _, _ = select.select([self.request_handle.fileno()], [], [], SHUTDOWN_DRAIN_SECS)
+            if ready:
+                os.read(self.request_handle.fileno(), 1 << 20)
+        except Exception:
+            pass
+
     def cleanup_handles(self):
         for handle_name in ['request_handle', 'response_handle']:
             h = getattr(self, handle_name, None)
@@ -277,6 +352,7 @@ class BalatroPipeIO:
                     setattr(self, handle_name, None)
 
     def cleanup(self):
+        remove_session_flag()
         self.cleanup_handles()
         if platform.system() != "Windows":
             for pipe_path in [self.request_pipe, self.response_pipe]:
