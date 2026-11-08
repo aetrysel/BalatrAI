@@ -35,7 +35,7 @@ from .utils.cli_reporter import CLIReporter, KeyListener, OutputLevel, coerce_le
 from .utils.debug import set_debug_output
 from .utils.lifecycle import (
     StopTrainingRequested, load_bridge_settings, save_bridge_settings, remove_session_flag,
-    validate_keybind, START_KEY_MODES,
+    validate_keybind,
 )
 from .utils.mappers import DECK_NAMES
 
@@ -390,11 +390,10 @@ SETTING_LABELS = [
     ("resume_run",     "Model"),
     ("log_group",      "Log group"),
     ("start_key",      "Start keybind"),
-    ("start_key_mode", "Start key mode"),
 ]
 
 # Kept in rlbridge_settings.json (shared with the Lua mod), not in last_session.json
-BRIDGE_SETTING_KEYS = ("start_key", "start_key_mode")
+BRIDGE_SETTING_KEYS = ("start_key",)  # start_key_mode stays in rlbridge_settings.json (default arm), not in the menu for now
 
 
 def load_last_settings() -> dict | None:
@@ -423,17 +422,6 @@ def select_start_key(current: str) -> str:
         if key:
             return key
         print("  Invalid keybind. Use zero or more of ctrl/shift/alt joined with '+', then one key (a-z, 0-9, f1-f18, space...).")
-
-
-def select_start_key_mode(current: str) -> str:
-    """Prompt for the start key mode. arm: key starts/wakes a session. toggle: key also stops a running one."""
-    while True:
-        raw = input(f"Start key mode — arm (key starts a session) or toggle (key also stops it) [{current}]: ").strip().lower()
-        if raw == "":
-            return current
-        if raw in START_KEY_MODES:
-            return raw
-        print(f"  Enter one of: {', '.join(START_KEY_MODES)}.")
 
 
 def validate_settings(settings: dict) -> dict:
@@ -495,8 +483,6 @@ def edit_setting(key: str, settings: dict, seeds: list) -> list:
             settings["log_group"] = existing_group
     elif key == "start_key":
         settings["start_key"] = select_start_key(settings["start_key"])
-    elif key == "start_key_mode":
-        settings["start_key_mode"] = select_start_key_mode(settings["start_key_mode"])
     elif key == "log_group":
         default = settings.get("resume_run") and find_run_log_group(settings["resume_run"])
         settings["log_group"] = select_log_group(LOGS_ROOT, default=default)
