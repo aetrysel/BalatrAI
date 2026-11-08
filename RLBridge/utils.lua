@@ -304,7 +304,7 @@ end
 local DEFAULT_SETTINGS = {
     start_key = "ctrl+r",
     start_key_mode = "arm",
-    auto_wake = true,
+    auto_start = false,
     win_hold_secs = 60,
     win_hold_secs_endless = 15,
 }
@@ -356,8 +356,8 @@ function UTIL.load_settings()
     if data.start_key_mode == "arm" or data.start_key_mode == "toggle" then
         settings.start_key_mode = data.start_key_mode
     end
-    if type(data.auto_wake) == "boolean" then
-        settings.auto_wake = data.auto_wake
+    if type(data.auto_start) == "boolean" then
+        settings.auto_start = data.auto_start
     end
     for _, name in ipairs({ "win_hold_secs", "win_hold_secs_endless" }) do
         if type(data[name]) == "number" and data[name] >= 0 then

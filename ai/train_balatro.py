@@ -366,10 +366,11 @@ SETTING_LABELS = [
     ("resume_run",     "Model"),
     ("log_group",      "Log group"),
     ("start_key",      "Start keybind"),
+    ("auto_start",     "Auto-start"),
 ]
 
 # Kept in rlbridge_settings.json (shared with the Lua mod), not in last_session.json
-BRIDGE_SETTING_KEYS = ("start_key",)  # start_key_mode stays in rlbridge_settings.json (default arm), not in the menu for now
+BRIDGE_SETTING_KEYS = ("start_key", "auto_start")  # start_key_mode stays in rlbridge_settings.json (default arm), not in the menu for now
 
 
 def load_last_settings() -> dict | None:
@@ -420,7 +421,7 @@ def format_setting(key: str, settings: dict, seeds: list) -> str:
             return "random"
         name = next((s["name"] for s in seeds if s["value"] == value), None)
         return f"{name} ({value})" if name else value
-    if key in ("endless", "debug"):
+    if key in ("endless", "debug", "auto_start"):
         return "ON" if value else "OFF"
     if key == "resume_run":
         if not value:
@@ -449,6 +450,9 @@ def edit_setting(key: str, settings: dict, seeds: list) -> list:
         if existing_group and existing_group != settings.get("log_group"):
             print(f"  Log group → {existing_group} (holds this run's TensorBoard entry)")
             settings["log_group"] = existing_group
+    elif key == "auto_start":
+        choice = input(f"Auto-start — begin training as soon as Balatro sees this session, without a key press? (y/N) [{'y' if settings['auto_start'] else 'N'}]: ").strip().lower()
+        settings["auto_start"] = choice == "y" if choice else settings["auto_start"]
     elif key == "start_key":
         settings["start_key"] = select_start_key(settings["start_key"])
     elif key == "log_group":
@@ -751,7 +755,7 @@ if __name__ == "__main__":
     print("1. ✅ Balatro is running with RLBridge mod")
     print("2. ✅ Balatro is in menu state")
 
-    input("Press Enter to start training (Balatro wakes automatically, or press your start key in game)...")
+    input("Press Enter to start training, then press your start key in Balatro (or enable Auto-start)...")
 
     try:
         Path(checkpoint_dir).mkdir(parents=True, exist_ok=True)

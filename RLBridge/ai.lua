@@ -26,6 +26,8 @@ local settings = utils.load_settings()
 local stop_requested = false        -- toggle mode: next request carries stop_requested = true
 local last_wake_check = 0           -- love.timer.getTime() of the last idle auto-wake poll
 local wake_blocked_until = 0        -- no auto-wake right after a stop, so a dying session's flag can't re-arm us
+local armed = false                 -- start key pressed, waiting for a Python session to appear (separate from rl_training_active)
+local waiting_prompted = false      -- "Training is waiting" notice already shown for the current session
 local WAKE_POLL_SECS = 1.0
 local SOCKET_WAKE_POLL_SECS = 3.0   -- socket mode has no flag file: probe the viewer server instead
 local WAKE_COOLDOWN_SECS = 3.0
@@ -46,10 +48,35 @@ local function is_pack_state(state)
         or (G.STATES.SMODS_BOOSTER_OPENED ~= nil and state == G.STATES.SMODS_BOOSTER_OPENED)
 end
 
+--- Short on-screen text (vanilla attention_text: non-blocking, fades by itself), also logged to lovely.log
+--- @param text string
+local function notify(text)
+    utils.log_ai("NOTICE: " .. text)
+    pcall(function()
+        if attention_text and G and G.ROOM then
+            attention_text({
+                text = text, scale = 0.6, hold = 2.5, align = "cm",
+                pos = { x = G.ROOM.T.w / 2, y = G.ROOM.T.h / 2 - 1 },
+            })
+        end
+    end)
+end
+
+--- Is the Python side ready? Pipe mode: live session flag (a plain file, can't block).
+--- Socket mode: a short-timeout connect, which keeps the connection on success.
+local function session_available()
+    if communication.get_mode() == "socket" then
+        return communication.try_connect()
+    end
+    return utils.session_ready()
+end
+
 --- Arm a session: enable communication and start answering requests
 --- @param reason string Logged
 local function arm_session(reason)
     settings = utils.load_settings()
+    armed = false
+    waiting_prompted = true
     communication.init()
     rl_training_active = true
     stop_requested = false
@@ -79,6 +106,10 @@ function AI.stop_session(reason)
     win_hold = nil
     stop_requested = false
     retry_count = 0
+    armed = false
+    if not settings.auto_start then
+        notify("JimBot disarmed")
+    end
     wake_blocked_until = love.timer.getTime() + WAKE_COOLDOWN_SECS
 end
 
@@ -142,7 +173,10 @@ function AI.init()
     end
 end
 
---- Handle a start key press: arm/wake when idle; in toggle mode request a clean stop when active
+--- Handle a start key press
+--- Active: toggle mode requests a clean stop, arm mode does nothing.
+--- Idle and disarmed: arm; start right away if a Python session is already waiting.
+--- Armed but not connected yet: disarm.
 local function handle_start_key()
     if rl_training_active then
         if settings.start_key_mode == "toggle" then
@@ -153,12 +187,18 @@ local function handle_start_key()
         return
     end
     settings = utils.load_settings()
-    if communication.get_mode() ~= "socket" and not utils.session_ready() then
-        -- A blocking FIFO open with no Python would freeze the game (a socket connect cannot block)
-        utils.log_ai("Start key pressed but no Python session is waiting (start train_balatro first)")
+    if armed and not settings.auto_start then
+        armed = false
+        notify("JimBot disarmed")
         return
     end
-    arm_session("start key")
+    if session_available() then
+        notify("JimBot armed — starting")
+        arm_session("start key")
+    else
+        armed = true
+        notify("JimBot armed — waiting for training")
+    end
 end
 
 --- Main AI update loop (called every frame)
@@ -170,17 +210,27 @@ function AI.update()
         handle_start_key()
     end
 
-    -- Inactive: stay completely quiet (no auto-skip, no FIFO opens) apart from the cheap auto-wake poll
+    -- Inactive: stay completely quiet (no auto-skip, no FIFO opens). Only a cheap poll runs once a second:
+    -- while armed (or auto_start) it connects as soon as a session appears; otherwise it only shows a
+    -- one-time "Training is waiting" notice (pipe mode: reads the flag file, never connects).
     if not rl_training_active then
         local now = love.timer.getTime()
         local socket_mode = communication.get_mode() == "socket"
         if now - last_wake_check >= (socket_mode and SOCKET_WAKE_POLL_SECS or WAKE_POLL_SECS) then
             last_wake_check = now
             settings = utils.load_settings()
-            if settings.auto_wake and now >= wake_blocked_until then
-                local ready = socket_mode and communication.try_connect() or (not socket_mode and utils.session_ready())
-                if ready then
-                    arm_session("auto-wake: session ready")
+            if (armed or settings.auto_start) and now >= wake_blocked_until then
+                if session_available() then
+                    arm_session(armed and "armed: session ready" or "auto-start: session ready")
+                end
+            elseif not socket_mode and now >= wake_blocked_until then
+                if utils.session_ready() then
+                    if not waiting_prompted then
+                        waiting_prompted = true
+                        notify("Training is waiting — press " .. settings.start_key .. " to start")
+                    end
+                else
+                    waiting_prompted = false
                 end
             end
         end

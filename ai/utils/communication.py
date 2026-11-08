@@ -12,6 +12,14 @@ from .lifecycle import (
     load_bridge_settings, remove_session_flag, write_session_flag, StopTrainingRequested,  # noqa: F401
 )
 
+def print_waiting_message() -> None:
+    settings = load_bridge_settings()
+    if settings["auto_start"]:
+        print(f"Waiting for Balatro… (auto-wake, or {settings['start_key']} in game)")
+    else:
+        print(f"Waiting for Balatro… press {settings['start_key']} in game to start")
+
+
 SHUTDOWN_RESPONSE = {"action": "SHUTDOWN"}
 # After SHUTDOWN, wait briefly for a request Lua may already be sending so its write doesn't hit a closed pipe
 SHUTDOWN_DRAIN_SECS = 0.5
@@ -50,7 +58,7 @@ class BalatroSocketIO:
         self._server_sock.listen(1)
 
         write_session_flag()
-        print(f"Waiting for Balatro… (auto-wake, or {load_bridge_settings()['start_key']} in game)")
+        print_waiting_message()
         self._conn, addr = self._server_sock.accept()
         self._conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self.logger.info(f"Balatro connected from {addr}")
@@ -194,7 +202,7 @@ class BalatroPipeIO:
         import win32file
 
         self.logger.info("Creating Windows named pipe servers...")
-        print(f"Waiting for Balatro… (auto-wake, or {load_bridge_settings()['start_key']} in game)")
+        print_waiting_message()
 
         self._req_pipe_handle = win32pipe.CreateNamedPipe(
             self.request_pipe,
@@ -225,7 +233,7 @@ class BalatroPipeIO:
         import threading
 
         self.logger.info("Creating Unix pipes...")
-        print(f"Waiting for Balatro… (auto-wake, or {load_bridge_settings()['start_key']} in game)")
+        print_waiting_message()
 
         req_fd = None
         res_fd = None

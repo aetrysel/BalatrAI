@@ -6,7 +6,7 @@ Two small files connect Python and Lua without ever blocking either side:
 - Session-ready flag (plain file): written by Python once the FIFOs exist, removed on cleanup.
   The idle game polls it once a second and auto-wakes when it appears. Contains Python's PID
   so Lua can ignore a stale flag left by a killed process.
-- rlbridge_settings.json: persistent user settings (start keybind and mode, auto-wake, win-hold
+- rlbridge_settings.json: persistent user settings (start keybind and mode, auto-start, win-hold
   durations). Lives in the LÖVE save directory of Balatro (Linux: ~/.local/share/love/Balatro,
   Windows: %APPDATA%/Balatro), the same directory as lovely.log, so it is outside the repo and
   never tracked by git. Lua resolves it with love.filesystem.getSaveDirectory().
@@ -22,7 +22,7 @@ from pathlib import Path
 DEFAULT_SETTINGS = {
     "start_key": "ctrl+r",
     "start_key_mode": "arm",
-    "auto_wake": True,
+    "auto_start": False,
     "win_hold_secs": 60,
     "win_hold_secs_endless": 15,
 }
@@ -126,8 +126,9 @@ def _clean(raw: dict) -> dict:
         out["start_key"] = key
     if raw.get("start_key_mode") in START_KEY_MODES:
         out["start_key_mode"] = raw["start_key_mode"]
-    if isinstance(raw.get("auto_wake"), bool):
-        out["auto_wake"] = raw["auto_wake"]
+    # "auto_wake" (old name, default True) was only ever written by a default, so it is ignored
+    if isinstance(raw.get("auto_start"), bool):
+        out["auto_start"] = raw["auto_start"]
     for name in ("win_hold_secs", "win_hold_secs_endless"):
         val = raw.get(name)
         if isinstance(val, (int, float)) and not isinstance(val, bool) and val >= 0:
@@ -154,6 +155,7 @@ def save_bridge_settings(updates: dict, path: Path | None = None) -> dict:
             existing = {}
     except (OSError, ValueError):
         existing = {}
+    existing.pop("auto_wake", None)  # old name of auto_start
     merged = {**DEFAULT_SETTINGS, **existing, **_clean(updates)}
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
