@@ -163,13 +163,32 @@ def test_settings_defaults_when_corrupt(tmp_path):
 def test_settings_partial_merge_and_invalid_dropped(tmp_path):
     p = tmp_path / "s.json"
     p.write_text(json.dumps({"start_key": "f9", "start_key_mode": "bogus", "win_hold_secs": -3,
-                             "auto_wake": "yes", "win_hold_secs_endless": 5}))
+                             "auto_start": "yes", "win_hold_secs_endless": 5}))
     s = lifecycle.load_bridge_settings(p)
     assert s["start_key"] == "f9"
     assert s["start_key_mode"] == "arm"
     assert s["win_hold_secs"] == 60
-    assert s["auto_wake"] is True
+    assert s["auto_start"] is False
     assert s["win_hold_secs_endless"] == 5
+
+
+def test_old_auto_wake_key_ignored_and_dropped_on_save(tmp_path):
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"auto_wake": True}))
+    assert lifecycle.DEFAULT_SETTINGS["auto_start"] is False
+    assert lifecycle.load_bridge_settings(p)["auto_start"] is False
+    assert "auto_wake" not in lifecycle.save_bridge_settings({"auto_start": True}, p)
+    assert lifecycle.load_bridge_settings(p)["auto_start"] is True
+
+
+def test_waiting_message_depends_on_auto_start(tmp_path, monkeypatch, capsys):
+    p = tmp_path / "s.json"
+    monkeypatch.setenv("BALATRO_SETTINGS_PATH", str(p))
+    communication.print_waiting_message()
+    assert "press ctrl+r in game to start" in capsys.readouterr().out
+    lifecycle.save_bridge_settings({"auto_start": True}, p)
+    communication.print_waiting_message()
+    assert "auto-wake, or ctrl+r in game" in capsys.readouterr().out
 
 
 def test_save_merges_and_keeps_unknown_keys(tmp_path):
