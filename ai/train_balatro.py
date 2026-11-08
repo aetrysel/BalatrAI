@@ -156,14 +156,8 @@ def select_training_steps() -> int:
 
 
 def select_debug_mode() -> bool:
-    """Prompt for debug mode (faster policy updates). Returns True if debug."""
-    choice = input("Debug mode — faster policy updates for testing? (y/N): ").strip().lower()
-    return choice == "y"
-
-
-def select_debug_output() -> bool:
-    """Prompt for debug-only CLI lines (dprint, e.g. BOSS BONUS). Toggle live during training with 'd'."""
-    choice = input("Debug output — show debug-only CLI lines like BOSS BONUS? (y/N): ").strip().lower()
+    """Prompt for debug mode (faster policy updates + debug-only CLI lines). Returns True if debug."""
+    choice = input("Debug mode — faster policy updates + debug-only CLI lines (e.g. BOSS BONUS)? (y/N): ").strip().lower()
     return choice == "y"
 
 
@@ -382,7 +376,6 @@ SETTING_LABELS = [
     ("endless",        "Endless"),
     ("debug",          "Debug mode"),
     ("output_level",   "Output level"),
-    ("debug_output",   "Debug output"),
     ("resume_run",     "Model"),
     ("log_group",      "Log group"),
 ]
@@ -424,7 +417,7 @@ def format_setting(key: str, settings: dict, seeds: list) -> str:
             return "random"
         name = next((s["name"] for s in seeds if s["value"] == value), None)
         return f"{name} ({value})" if name else value
-    if key in ("endless", "debug", "debug_output"):
+    if key in ("endless", "debug"):
         return "ON" if value else "OFF"
     if key == "output_level":
         return coerce_level(value).name
@@ -450,8 +443,6 @@ def edit_setting(key: str, settings: dict, seeds: list) -> list:
         settings["debug"] = select_debug_mode()
     elif key == "output_level":
         settings["output_level"] = select_output_level()
-    elif key == "debug_output":
-        settings["debug_output"] = select_debug_output()
     elif key == "resume_run":
         settings["resume_run"], settings["new_run_name"] = select_model(MODELS_DIR)
         # Continuing a run defaults to the log group that already holds its TB entry
@@ -471,7 +462,7 @@ def configure_session(seeds: list) -> tuple[dict, list]:
     Returns (settings, seeds).
     """
     defaults = {"seed": None, "deck": DECK_NAMES[0], "training_steps": DEFAULT_TRAINING_STEPS,
-                "endless": False, "debug": False, "output_level": int(OutputLevel.ROUND), "debug_output": False, "resume_run": None, "new_run_name": "run", "log_group": None}
+                "endless": False, "debug": False, "output_level": int(OutputLevel.ROUND), "resume_run": None, "new_run_name": "run", "log_group": None}
     saved = load_last_settings()
     if saved is None:
         settings = dict(defaults)
@@ -765,7 +756,7 @@ if __name__ == "__main__":
     # Live output-level switching (keys 1-5); no-op when stdin is not a terminal
     reporter = CLIReporter(level=coerce_level(settings.get("output_level")),
                            seeded=seed_choice is not None)
-    set_debug_output(settings.get("debug_output", False))
+    set_debug_output(settings["debug"])  # debug mode also shows debug-only CLI lines (toggle live with d)
     key_listener = KeyListener(reporter)
     if key_listener.start():
         # print("Output level keys active: 1-5 switch level, ? for help.")
