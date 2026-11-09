@@ -189,6 +189,13 @@ function STATS.last_played_hand()
     return stats and stats.last_played_hand or nil
 end
 
+--- Name of the most recently opened booster pack (not cleared when the pack closes)
+--- @return string
+function STATS.current_pack_name()
+    local stats = run_stats()
+    return stats and stats.current_pack or ""
+end
+
 --- Per-run tag and booster counters for output.get_run_stats()
 --- @return table {tags = {by_key, by_source}, packs = {[name] = {offered, opened, bought, picks, skips}}, boss_rerolls}
 function STATS.get()

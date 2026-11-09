@@ -103,7 +103,7 @@ Then start Balatro and press `R` in-game to activate the RL loop.
 Every run has one name, `<run>` = `NNN_Custom_Name_YYYYMMDD_HHMMSS` (3-digit run number), shared by:
 - `models/<run>/` — checkpoints
 - `logs/NNN_group/tensorboard/<run>/` — one TB entry per run; every session of the run writes another event file into it. Continuing passes `reset_num_timesteps=False`, so the step axis (and checkpoint step numbers) carry on and the curve stays continuous.
-- `logs/NNN_group/history/<run>_session_NN.log` — a new history file every session (numbered across all groups)
+- `logs/NNN_group/history/<run>_session_NN.log` — a new history file every session (numbered across all groups); a session file over 15 MB continues at the next episode boundary in `<run>_session_NN_part_02.log`, `_part_03`, ... (ignored when numbering sessions)
 
 Point TensorBoard at a group: `tensorboard --logdir logs/NNN_name/tensorboard`.
 
