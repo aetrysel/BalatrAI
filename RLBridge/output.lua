@@ -67,11 +67,47 @@ function O.get_game_state()
         consumable_slots_max = G.consumeables and G.consumeables.config and G.consumeables.config.card_limit or 2,
         pack_cards = O.get_pack_cards(),
         pack_choices = G.GAME and G.GAME.pack_choices or 0,
+        pack_name = stats.current_pack_name(),
+        blind_on_deck = G.GAME and G.GAME.blind_on_deck or "",
+        blind_choices = O.get_blind_choices(),
+        blind_choice_chips = O.get_blind_choice_chips(),
         deck_cards = O.get_deck_cards(),
         auto_endless_config = utils.get_run_config().endless or false,
         shop = { items = O.get_shop_items() },
         run_stats = O.get_run_stats(),
     }
+end
+
+-- Names of the Small / Big / Boss blinds offered this ante ("" when unknown)
+function O.get_blind_choices()
+    local out = { Small = "", Big = "", Boss = "" }
+    local choices = G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_choices
+    if choices and G.P_BLINDS then
+        for k in pairs(out) do
+            local def = choices[k] and G.P_BLINDS[choices[k]]
+            if def and def.name then out[k] = def.name end
+        end
+    end
+    return out
+end
+
+-- Chip targets of the Small / Big / Boss blinds offered this ante (0 when unknown)
+function O.get_blind_choice_chips()
+    local out = { Small = 0, Big = 0, Boss = 0 }
+    local choices = G.GAME and G.GAME.round_resets and G.GAME.round_resets.blind_choices
+    if choices and G.P_BLINDS and G.GAME.starting_params and get_blind_amount then
+        local ante = G.GAME.round_resets.ante or 1
+        for k in pairs(out) do
+            local def = choices[k] and G.P_BLINDS[choices[k]]
+            if def and def.mult then
+                local ok, amt = pcall(get_blind_amount, ante)
+                if ok and type(amt) == "number" then
+                    out[k] = math.floor(amt * def.mult * (G.GAME.starting_params.ante_scaling or 1))
+                end
+            end
+        end
+    end
+    return out
 end
 
 -- Per-run counters the game already tracks (reset on new run)
@@ -219,6 +255,8 @@ function O.get_consumables()
                 name = card.config.center.name or "Unknown",
                 item_set = (card.config.center.set or "Unknown"),
                 slot = i,
+                sell_cost = card.sell_cost or 0,
+                edition = get_edition_str(card),
                 -- Hand cards that must be highlighted to use it (0 = no selection needed)
                 max_highlighted = cfg.max_highlighted or 0,
                 min_highlighted = cfg.max_highlighted and (cfg.min_highlighted or 1) or 0,
@@ -243,13 +281,21 @@ function O.get_pack_cards()
                 name = (card.base.value or "") .. (card.base.suit or "")
                 item_set = "Standard"
             end
-            table.insert(pack_cards, {
+            local entry = {
                 name = name,
                 item_set = item_set,
                 slot = i,
                 edition = get_edition_str(card),
                 usable = utils.can_take_pack_card(card),
-            })
+            }
+            -- Playing cards (Standard packs): rank, suit, enhancement and seal
+            if card.base and (item_set == "Default" or item_set == "Enhanced") then
+                entry.value = card.base.value
+                entry.suit = card.base.suit
+                entry.enhancement = item_set == "Enhanced" and name or "None"
+                entry.seal = card.seal or "None"
+            end
+            table.insert(pack_cards, entry)
         end
     end
     return pack_cards

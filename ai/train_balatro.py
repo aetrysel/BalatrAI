@@ -320,6 +320,8 @@ def next_session_number(run_name: str) -> int:
     """Next history session number for a run, scanning every log group's history/ dir."""
     nums = []
     for path in LOGS_ROOT.glob(f"*/history/{run_name}_session_*.log"):
+        if "_part_" in path.stem:
+            continue
         try:
             nums.append(int(path.stem.rsplit("_", 1)[1]))
         except (IndexError, ValueError):
